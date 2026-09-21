@@ -98,6 +98,7 @@ private:
     bool i_applying;        // guards AEGP_ExecuteScript re-entry
     bool i_suppressChange;  // ResetSearch must not trigger a second search
     bool i_groupMode;       // the rows are classes, not entries
+    bool i_kindMode;        // the rows are kinds (effect / preset)
 
     pinyin::UsageTable i_usage; // "%APPDATA%\AEPinyinSearch\usage.tsv"
 

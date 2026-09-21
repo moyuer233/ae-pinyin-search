@@ -187,9 +187,91 @@ int main()
 
     pinyin::SearchQuery("@", hits, 1000);
     Check(hits.empty(), "@ alone produces no entry rows");
-    Check(pinyin::ParseQuery("@").kind == pinyin::QueryKind::GroupList, "@ alone is GroupList");
-    Check(pinyin::ParseQuery("BCC").kind == pinyin::QueryKind::Text, "bare BCC stays a text query");
-    Check(pinyin::ParseQuery("@BCC").kind == pinyin::QueryKind::GroupFilter, "@BCC is GroupFilter");
+    Check(pinyin::ParseQuery("@").listClasses, "@ alone is the class browser");
+    Check(!pinyin::ParseQuery("BCC").listClasses, "bare BCC does not open the browser");
+    Check(pinyin::ParseQuery("@BCC").group == "BCC", "@BCC parses into a class filter");
+
+    // ---------------------------------------------------------------------
+    // "#" filters by kind (effect / preset) and combines with "@".
+    // ---------------------------------------------------------------------
+    Check(pinyin::ParseQuery("#").listKinds, "# alone is the kind browser");
+    Check(pinyin::KindOf("效果") == 1, "KindOf understands 效果");
+    Check(pinyin::KindOf("预设") == 2, "KindOf understands 预设");
+    Check(pinyin::KindOf("presets") == 2, "KindOf understands the english spelling");
+    Check(pinyin::KindOf("zzz") == -1, "KindOf rejects an unknown kind");
+
+    pinyin::SearchQuery("#效果", hits, 1000);
+    {
+        bool allEffects = !hits.empty();
+        for (const pinyin::Hit& h : hits)
+        {
+            if (kPinyinEntries[h.index].is_preset)
+            {
+                allEffects = false;
+                break;
+            }
+        }
+        Check(allEffects, "#效果 returns effects only");
+        std::printf("      #效果 -> %d rows (capped by the limit)\n", static_cast<int>(hits.size()));
+    }
+
+    pinyin::SearchQuery("#预设", hits, 1000);
+    {
+        bool allPresets = !hits.empty();
+        for (const pinyin::Hit& h : hits)
+        {
+            if (!kPinyinEntries[h.index].is_preset)
+            {
+                allPresets = false;
+                break;
+            }
+        }
+        Check(allPresets, "#预设 returns presets only");
+        std::printf("      #预设 -> %d rows\n", static_cast<int>(hits.size()));
+    }
+
+    pinyin::SearchQuery("#preset", hits, 1000);
+    Check(!hits.empty() && kPinyinEntries[hits[0].index].is_preset, "#preset works in english");
+
+    pinyin::SearchQuery("#zzz", hits, 1000);
+    Check(hits.empty(), "an unknown kind returns nothing");
+
+    pinyin::SearchQuery("@boris #效果", hits, 1000);
+    Check(!hits.empty() && AllVendorsStartWith(hits, "boris"), "@boris #效果 keeps the class");
+    Check(!hits.empty() && !kPinyinEntries[hits[0].index].is_preset, "@boris #效果 keeps the kind");
+    std::printf("      @boris #效果 -> %d rows\n", static_cast<int>(hits.size()));
+
+    pinyin::SearchQuery("#预设 @legacy", hits, 1000);
+    {
+        bool ok = !hits.empty();
+        for (const pinyin::Hit& h : hits)
+        {
+            if (!kPinyinEntries[h.index].is_preset)
+            {
+                ok = false;
+                break;
+            }
+        }
+        Check(ok, "#预设 @legacy returns presets only, in any order");
+    }
+
+    pinyin::SearchQuery("@bfx #效果 blur", hits, 1000);
+    Check(!hits.empty() && AllVendorsStartWith(hits, "boris"), "@bfx #效果 blur keeps the class");
+    Check(!hits.empty() && !kPinyinEntries[hits[0].index].is_preset, "@bfx #效果 blur keeps the kind");
+
+    std::vector<pinyin::GroupInfo> kinds;
+    pinyin::ListKinds(kinds);
+    Check(kinds.size() == 2, "the kind browser has two rows");
+    {
+        int total = 0;
+        for (const pinyin::GroupInfo& k : kinds)
+        {
+            total += k.count;
+            Check(!k.key.empty(), "a kind row carries the key to type");
+            std::printf("      kind %-8s %5d  key=%s\n", k.name.c_str(), k.count, k.key.c_str());
+        }
+        Check(total == kPinyinEntryCount, "the kind counts add up to the whole table");
+    }
 
     std::vector<pinyin::GroupInfo> groups;
     pinyin::ListGroups(groups, 2);

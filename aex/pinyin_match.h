@@ -382,9 +382,12 @@ inline bool InClass(const PinyinEntry& e, const std::string& wantLower, const st
     return NameStartsWith(e.name, wantLower) || NameStartsWith(e.english, wantLower);
 }
 
+// A row in the "@" / "#" browser: what to show, what to type for it, how many
+// entries it holds.
 struct GroupInfo
 {
     std::string name;
+    std::string key;
     int count;
 };
 
@@ -413,6 +416,7 @@ inline void ListGroups(std::vector<GroupInfo>& out, int minCount)
         {
             GroupInfo gi;
             gi.name = v;
+            gi.key = AliasForVendor(v);
             gi.count = 1;
             out.push_back(gi);
         }
@@ -433,20 +437,72 @@ inline void ListGroups(std::vector<GroupInfo>& out, int minCount)
     });
 }
 
-enum class QueryKind
+// The kinds the "#" filter understands, for the list you get from typing "#".
+inline void ListKinds(std::vector<GroupInfo>& out)
 {
-    Text,       // plain pinyin / name search
-    GroupList,  // "@" on its own: list the classes
-    GroupFilter // "@bcc" (or a bare "bcc" that names a class): only that class
-};
+    out.clear();
+    GroupInfo effects;
+    effects.name = "效果";
+    effects.key = "effect";
+    effects.count = 0;
+    GroupInfo presets;
+    presets.name = "预设";
+    presets.key = "preset";
+    presets.count = 0;
 
+    for (int i = 0; i < kPinyinEntryCount; ++i)
+    {
+        if (kPinyinEntries[i].is_preset)
+        {
+            presets.count++;
+        }
+        else
+        {
+            effects.count++;
+        }
+    }
+    if (effects.count > 0)
+    {
+        out.push_back(effects);
+    }
+    if (presets.count > 0)
+    {
+        out.push_back(presets);
+    }
+}
+
+// 0 = no kind filter, 1 = effects only, 2 = presets only, -1 = unknown kind.
+inline int KindOf(const std::string& token)
+{
+    if (token.empty())
+    {
+        return 0;
+    }
+    // VendorKey folds case and separators but drops non-ascii, so the chinese
+    // spellings have to be compared against the raw token.
+    const std::string k = VendorKey(token.c_str());
+    if (k == "effect" || k == "effects" || token == "效果" || token == "特效")
+    {
+        return 1;
+    }
+    if (k == "preset" || k == "presets" || token == "预设")
+    {
+        return 2;
+    }
+    return -1;
+}
+
+// A parsed query. The filters combine, so "@boris #预设 blur" means: Boris FX
+// entries, presets only, matching "blur".
 struct Query
 {
-    QueryKind kind;
-    std::string group;
-    std::string rest;
+    bool listClasses;     // the query is exactly "@"
+    bool listKinds;       // the query is exactly "#"
+    std::string group;    // class filter ("" = none)
+    std::string kindName; // kind filter ("" = none)
+    std::string text;     // free text ("" = none)
 
-    Query() : kind(QueryKind::Text) {}
+    Query() : listClasses(false), listKinds(false) {}
 };
 
 inline bool IsKnownGroup(const std::string& token)
@@ -476,73 +532,88 @@ inline Query ParseQuery(const std::string& raw)
         return q;
     }
     std::string s = raw.substr(begin);
-    if (s[0] != '@')
+    while (!s.empty() && (s.back() == ' ' || s.back() == '\t'))
     {
-        return q; // only an explicit "@" switches modes; a bare class token is
-                  // handled by SearchQuery below, which keeps the normal matches
+        s.pop_back();
     }
-    s = s.substr(1);
-
-    // A vendor name may contain spaces ("Red Giant Universe"): if the whole
-    // remainder names a class, take it whole instead of splitting it apart.
-    if (IsKnownGroup(s))
+    if (s.empty())
     {
-        q.kind = QueryKind::GroupFilter;
-        q.group = s;
-        q.rest.clear();
+        return q;
+    }
+    if (s == "@")
+    {
+        q.listClasses = true;
+        return q;
+    }
+    if (s == "#")
+    {
+        q.listKinds = true;
         return q;
     }
 
-    std::string head = s;
-    std::string tail;
-    const size_t sp = s.find_first_of(" \t");
-    if (sp != std::string::npos)
+    // A vendor name may contain spaces ("Red Giant Universe"): if the whole
+    // remainder after "@" names a class, take it whole instead of splitting it.
+    if (s[0] == '@' && IsKnownGroup(s.substr(1)))
     {
-        head = s.substr(0, sp);
-        tail = s.substr(sp + 1);
+        q.group = s.substr(1);
+        return q;
     }
 
-    q.kind = head.empty() ? QueryKind::GroupList : QueryKind::GroupFilter;
-    q.group = head;
-    q.rest = tail;
+    bool sawAt = false;
+    size_t pos = 0;
+    while (pos < s.size())
+    {
+        const size_t sp = s.find_first_of(" \t", pos);
+        const std::string tok = (sp == std::string::npos) ? s.substr(pos) : s.substr(pos, sp - pos);
+        pos = (sp == std::string::npos) ? s.size() : sp + 1;
+        if (tok.empty())
+        {
+            continue;
+        }
+        if (tok[0] == '@')
+        {
+            if (!sawAt && tok.size() > 1)
+            {
+                q.group = tok.substr(1);
+                sawAt = true;
+            }
+            continue;
+        }
+        if (tok[0] == '#')
+        {
+            if (q.kindName.empty() && tok.size() > 1)
+            {
+                q.kindName = tok.substr(1);
+            }
+            continue;
+        }
+        if (!q.text.empty())
+        {
+            q.text += ' ';
+        }
+        q.text += tok;
+    }
+
+    // Typing a vendor name without "@" means the same as "@vendor".
+    if (q.group.empty() && q.kindName.empty() && !q.text.empty())
+    {
+        const size_t sp = q.text.find(' ');
+        const std::string head = (sp == std::string::npos) ? q.text : q.text.substr(0, sp);
+        if (IsKnownGroup(head))
+        {
+            q.group = head;
+            q.text = (sp == std::string::npos) ? std::string() : q.text.substr(sp + 1);
+        }
+    }
     return q;
 }
 
-// All entries of a class, in name order; `rest` narrows within the class.
-inline void SearchGroup(
-    const std::string& group,
-    const std::string& rest,
-    std::vector<Hit>& out,
-    size_t limit,
-    const UsageTable* usage = NULL)
+inline void SortHits(std::vector<Hit>& out, size_t limit)
 {
-    out.clear();
-    const std::string expanded = ExpandAlias(group); // "@BFX" -> "Boris FX"
-    const std::string wantLower = ToLowerAscii(expanded);
-    const std::string wantVendor = VendorKey(expanded.c_str());
-    const std::string q = Normalize(rest.c_str());
-
-    for (int i = 0; i < kPinyinEntryCount; ++i)
-    {
-        if (!InClass(kPinyinEntries[i], wantLower, wantVendor))
-        {
-            continue;
-        }
-        const int s = q.empty() ? 0 : Score(kPinyinEntries[i], q, usage);
-        if (!q.empty() && s < 0)
-        {
-            continue;
-        }
-        Hit h;
-        h.index = i;
-        h.score = s;
-        out.push_back(h);
-    }
-
     std::stable_sort(out.begin(), out.end(), [](const Hit& a, const Hit& b) {
         if (a.score != b.score)
         {
-            return a.score > b.score; // most used first inside the class
+            return a.score > b.score; // most used / most relevant first
         }
         return std::strcmp(kPinyinEntries[a.index].name, kPinyinEntries[b.index].name) < 0;
     });
@@ -576,83 +647,71 @@ inline void Search(
             out.push_back(h);
         }
     }
-    std::stable_sort(out.begin(), out.end(), [](const Hit& a, const Hit& b) {
-        if (a.score != b.score)
-        {
-            return a.score > b.score;
-        }
-        return std::strcmp(kPinyinEntries[a.index].name, kPinyinEntries[b.index].name) < 0;
-    });
-    if (out.size() > limit)
-    {
-        out.resize(limit);
-    }
+    SortHits(out, limit);
 }
 
-// The whole pipeline the UI uses: "@" lists the classes, "@x" filters to one
-// class, and a bare vendor name behaves like "@vendor" (its entries first, then
-// the ordinary matches) so that typing the vendor is not worse than @-ing it.
+// The whole pipeline the UI uses. Filters combine: "@" picks a class, "#" picks
+// a kind (effect / preset) and everything else is free text, in any order.
 inline void SearchQuery(
     const std::string& raw,
     std::vector<Hit>& out,
     size_t limit,
     const UsageTable* usage = NULL)
 {
-    const Query q = ParseQuery(raw);
-    if (q.kind == QueryKind::GroupFilter)
-    {
-        SearchGroup(q.group, q.rest, out, limit, usage);
-        return;
-    }
-    if (q.kind == QueryKind::GroupList)
-    {
-        out.clear(); // the UI lists the classes itself
-        return;
-    }
-
-    const size_t firstSpace = raw.find_first_of(" \t");
-    const std::string headRaw = raw.substr(0, firstSpace);
-
-    std::vector<Hit> plain;
-    std::vector<Hit> cls;
-    if (IsKnownGroup(headRaw))
-    {
-        const std::string rest = (firstSpace == std::string::npos) ? std::string() : raw.substr(firstSpace + 1);
-        SearchGroup(headRaw, rest, cls, limit, usage);
-        // Ordinary matches are kept: a vendor name may also appear in other
-        // names, and hiding those would be a regression.
-        Search(rest.empty() ? raw : rest, plain, limit, usage);
-    }
-    else
-    {
-        Search(raw, plain, limit, usage);
-    }
-
     out.clear();
-    for (const Hit& h : cls)
+    const Query q = ParseQuery(raw);
+    if (q.listClasses || q.listKinds)
     {
-        out.push_back(h);
+        return; // the UI lists the classes / kinds itself
     }
-    for (const Hit& h : plain)
+
+    const int kindWant = KindOf(q.kindName);
+    if (kindWant < 0)
     {
-        bool dup = false;
-        for (const Hit& seen : out)
+        return; // "#something" that is not a kind we know
+    }
+
+    const std::string text = Normalize(q.text.c_str());
+    std::string wantLower;
+    std::string wantVendor;
+    if (!q.group.empty())
+    {
+        const std::string expanded = ExpandAlias(q.group); // "@BFX" -> "Boris FX"
+        wantLower = ToLowerAscii(expanded);
+        wantVendor = VendorKey(expanded.c_str());
+    }
+
+    for (int i = 0; i < kPinyinEntryCount; ++i)
+    {
+        const PinyinEntry& e = kPinyinEntries[i];
+        if (kindWant != 0 && ((kindWant == 2) != (e.is_preset != 0)))
         {
-            if (seen.index == h.index)
+            continue;
+        }
+        if (!q.group.empty() && !InClass(e, wantLower, wantVendor))
+        {
+            continue;
+        }
+        int score = 0;
+        if (!text.empty())
+        {
+            score = Score(e, text, usage);
+            if (score < 0)
             {
-                dup = true;
-                break;
+                continue;
             }
         }
-        if (!dup)
+        else if (usage)
         {
-            out.push_back(h);
+            score = usage->Boost(e.name); // browsing a class/kind: used ones first
         }
+        Hit h;
+        h.index = i;
+        h.score = score;
+        out.push_back(h);
     }
-    if (out.size() > limit)
-    {
-        out.resize(limit);
-    }
+
+    SortHits(out, limit);
 }
 
 } // namespace pinyin

@@ -34,9 +34,10 @@
 namespace {
 
 const wchar_t* kWndClass = L"AEPinyinSearchPopup";
-const wchar_t* kHint = L"拼音 / 首字母 / 英文 → 回车应用并关闭；@ 只看某一类";
+const wchar_t* kHint = L"拼音 / 首字母 / 英文 → 回车应用；@ 分类 · # 类型";
 const wchar_t* kNoHit = L"没有匹配项";
 const wchar_t* kNoGroup = L"没有这一类（试试只打 @）";
+const wchar_t* kNoKind = L"没有这一类型（试试 #效果 / #预设）";
 
 constexpr int kEditID = 2001;
 constexpr int kListID = 2002;
@@ -185,7 +186,8 @@ PinyinPopup::PinyinPopup(SPBasicSuite* spbP, AEGP_PluginID pluginID)
       i_activated(false),
       i_applying(false),
       i_suppressChange(false),
-      i_groupMode(false)
+      i_groupMode(false),
+      i_kindMode(false)
 {
 }
 
@@ -541,6 +543,7 @@ void PinyinPopup::ResetSearch()
     i_hits.clear();
     i_groups.clear();
     i_groupMode = false;
+    i_kindMode = false;
     ResizeToRows(0);
 }
 
@@ -554,11 +557,19 @@ void PinyinPopup::RunSearch()
     const std::string q = ToUtf8(Query());
     const pinyin::Query parsed = pinyin::ParseQuery(q);
 
-    i_groupMode = (parsed.kind == pinyin::QueryKind::GroupList);
-    if (i_groupMode)
+    i_groupMode = parsed.listClasses;
+    i_kindMode = parsed.listKinds;
+    if (i_groupMode || i_kindMode)
     {
-        // "@" on its own: list the classes, biggest first.
-        pinyin::ListGroups(i_groups, 2);
+        // "@" lists the classes, "#" lists the kinds; both are browsers.
+        if (i_kindMode)
+        {
+            pinyin::ListKinds(i_groups);
+        }
+        else
+        {
+            pinyin::ListGroups(i_groups, 2);
+        }
         i_hits.clear();
     }
     else
@@ -585,7 +596,7 @@ void PinyinPopup::RunSearch()
         }
     }
 
-    const size_t rows = i_groupMode ? i_groups.size() : i_hits.size();
+    const size_t rows = (i_groupMode || i_kindMode) ? i_groups.size() : i_hits.size();
     if (rows == 0)
     {
         SendMessageW(i_listH, LB_SETCURSEL, static_cast<WPARAM>(-1), 0);
@@ -725,21 +736,21 @@ void PinyinPopup::ApplySelected()
         return; // AEGP_ExecuteScript pumps messages; do not re-enter
     }
     const int sel = static_cast<int>(SendMessageW(i_listH, LB_GETCURSEL, 0, 0));
-    if (i_groupMode)
+    if (i_groupMode || i_kindMode)
     {
         if (sel < 0 || sel >= static_cast<int>(i_groups.size()))
         {
             return;
         }
-        // Turning a class row into "@class" is what makes Enter useful on the
-        // list you get from typing a bare "@". Short vendors keep their alias
-        // ("Boris FX" -> "@BFX"), the rest fold to a single token.
-        const std::string key = pinyin::AliasForVendor(i_groups[sel].name);
+        // Turning a browser row into its filter is what makes Enter useful on
+        // the list you get from typing a bare "@" or "#". That also shows how
+        // the two combine: "@bfx #预设".
+        const std::string& key = i_groups[sel].key;
         if (key.empty())
         {
             return;
         }
-        const std::wstring text = L"@" + Utf8ToWide(key.c_str());
+        const std::wstring text = (i_kindMode ? L"#" : L"@") + Utf8ToWide(key.c_str());
         SetWindowTextW(i_editH, text.c_str());
         SendMessageW(i_editH, EM_SETSEL, text.size(), text.size());
         return;
@@ -896,7 +907,7 @@ void PinyinPopup::DrawRow(const DRAWITEMSTRUCT& dis)
     std::wstring name;
     std::wstring secondary;
     const wchar_t* badge = L"";
-    if (i_groupMode)
+    if (i_groupMode || i_kindMode)
     {
         if (dis.itemID >= i_groups.size())
         {
@@ -905,7 +916,7 @@ void PinyinPopup::DrawRow(const DRAWITEMSTRUCT& dis)
         const pinyin::GroupInfo& g = i_groups[dis.itemID];
         name = Utf8ToWide(g.name.c_str());
         secondary = std::to_wstring(g.count) + L" 项";
-        badge = L"分类";
+        badge = i_kindMode ? L"类型" : L"分类";
     }
     else
     {
@@ -1016,7 +1027,7 @@ LRESULT PinyinPopup::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPar
         SelectObject(hdc, oldBrush);
         SelectObject(hdc, oldPen);
 
-        const bool empty = i_groupMode ? i_groups.empty() : i_hits.empty();
+        const bool empty = (i_groupMode || i_kindMode) ? i_groups.empty() : i_hits.empty();
         if (empty && !Query().empty())
         {
             RECT text = {rc.left + Scale(12), Scale(kEditH) + 1, rc.right - Scale(12), rc.bottom};
@@ -1024,7 +1035,16 @@ LRESULT PinyinPopup::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPar
             SetBkMode(hdc, TRANSPARENT);
             SetTextColor(hdc, kText3);
             const pinyin::Query parsed = pinyin::ParseQuery(ToUtf8(Query()));
-            const wchar_t* line = (parsed.kind == pinyin::QueryKind::GroupFilter) ? kNoGroup : kNoHit;
+            const bool badKind = !parsed.kindName.empty() && pinyin::KindOf(parsed.kindName) < 0;
+            const wchar_t* line = kNoHit;
+            if (parsed.listKinds || badKind)
+            {
+                line = kNoKind;
+            }
+            else if (!parsed.group.empty())
+            {
+                line = kNoGroup;
+            }
             DrawTextW(hdc, line, -1, &text, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
         }
 

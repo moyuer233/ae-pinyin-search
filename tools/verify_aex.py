@@ -42,10 +42,12 @@ must_utf8 = [
 must_utf16 = [
     ("popup window class", u16("AEPinyinSearchPopup")),
     ("window title", u16("拼音搜索")),
-    ("search hint", u16("@ 只看某一类")),
+    ("search hint", u16("@ 分类 · # 类型")),
     ("no-match line", u16("没有匹配项")),
     ("no-class line", u16("没有这一类")),
+    ("no-kind line", u16("没有这一类型")),
     ("class badge", u16("分类")),
+    ("kind badge", u16("类型")),
     ("count unit", u16(" 项")),
     ("badge preset", u16("预设")),
     ("badge effect", u16("效果")),
