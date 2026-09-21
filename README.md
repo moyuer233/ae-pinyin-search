@@ -72,3 +72,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\rebuild_aex.ps1 -Deplo
 - 浮窗是插件自己创建的顶层窗口：AEGP 的面板套件（`AEGP_PanelSuite1`）没有"浮动"接口，做浮窗只能这么来。
 - 目前只有 Windows 实现（UI 在 `Win\` 下，匹配层与索引是平台无关的）。
 - 第三方效果名取的是插件目录里的 `.aex` 文件名，中文界面下 AE 显示的名字可能与它略有差异；预设应用依赖预设目录结构。
+
+## 许可与来源
+
+- 本项目自己写的文件（`aex/Win/`、`aex/pinyin_match.h`、`aex/pinyin_data.*`、`tools/`）：**MIT**，见 `LICENSE`。
+- `aex/AEPinyinSearch.cpp`、`aex/AEPinyinSearch.h`、`aex/AEPinyinSearch_Strings.cpp`、`aex/PT_Err.h` 保留 Adobe 版权头，
+  它们改写自 Adobe After Effects SDK 的 **Panelator** 示例。这些文件头里的 NOTICE 原文是
+  "Adobe permits you to use, modify, and distribute this file in accordance with the terms of the Adobe license
+  agreement accompanying it"，即按随附的 **AE SDK 许可协议**分发。
+- **AE SDK 本体（Headers / Util / 其余示例）不在本仓库**，构建时由 vcxproj 用相对路径指向你自己解压的 SDK 目录；
+  SDK 需要自己从 Adobe 获取。
+- 本项目与 Adobe 无隶属关系，也未获得 Adobe 的背书。
+
