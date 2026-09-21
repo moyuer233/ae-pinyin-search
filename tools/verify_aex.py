@@ -48,6 +48,8 @@ must_utf16 = [
     ("no-kind line", u16("没有这一类型")),
     ("class badge", u16("分类")),
     ("kind badge", u16("类型")),
+    ("recent row wording", u16("用过 ")),
+    ("recent row unit", u16(" 次")),
     ("count unit", u16(" 项")),
     ("badge preset", u16("预设")),
     ("badge effect", u16("效果")),

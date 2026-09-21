@@ -187,7 +187,8 @@ PinyinPopup::PinyinPopup(SPBasicSuite* spbP, AEGP_PluginID pluginID)
       i_applying(false),
       i_suppressChange(false),
       i_groupMode(false),
-      i_kindMode(false)
+      i_kindMode(false),
+      i_recentMode(false)
 {
 }
 
@@ -297,20 +298,29 @@ void PinyinPopup::LoadUsage()
     char line[1024];
     while (std::fgets(line, sizeof(line), f))
     {
-        char* tab = std::strchr(line, '\t');
-        if (!tab)
+        // count <TAB> lastUsed <TAB> name; older files only have count <TAB> name
+        char* first = std::strchr(line, '\t');
+        if (!first)
         {
             continue;
         }
-        *tab = '\0';
+        *first = '\0';
         const int count = std::atoi(line);
-        char* name = tab + 1;
+        char* second = std::strchr(first + 1, '\t');
+        int lastUsed = 0;
+        char* name = first + 1;
+        if (second)
+        {
+            *second = '\0';
+            lastUsed = std::atoi(first + 1);
+            name = second + 1;
+        }
         size_t len = std::strlen(name);
         while (len > 0 && (name[len - 1] == '\n' || name[len - 1] == '\r'))
         {
             name[--len] = '\0';
         }
-        i_usage.Add(name, count);
+        i_usage.Add(name, count, lastUsed);
     }
     std::fclose(f);
     AEPinyinLog("usage: loaded %d name(s) from %s", static_cast<int>(i_usage.Size()), path.c_str());
@@ -331,7 +341,7 @@ void PinyinPopup::SaveUsage()
     }
     for (size_t i = 0; i < i_usage.Size(); ++i)
     {
-        std::fprintf(f, "%d\t%s\n", i_usage.CountAt(i), i_usage.NameAt(i).c_str());
+        std::fprintf(f, "%d\t%d\t%s\n", i_usage.CountAt(i), i_usage.LastUsedAt(i), i_usage.NameAt(i).c_str());
     }
     std::fclose(f);
 }
@@ -544,6 +554,7 @@ void PinyinPopup::ResetSearch()
     i_groups.clear();
     i_groupMode = false;
     i_kindMode = false;
+    i_recentMode = false;
     ResizeToRows(0);
 }
 
@@ -559,7 +570,17 @@ void PinyinPopup::RunSearch()
 
     i_groupMode = parsed.listClasses;
     i_kindMode = parsed.listKinds;
-    if (i_groupMode || i_kindMode)
+    i_recentMode = false;
+
+    if (q.empty())
+    {
+        // Nothing typed yet: offer what was used last, newest first, so the
+        // popup is useful the moment it opens.
+        i_groups.clear();
+        pinyin::RecentHits(i_usage, i_hits, static_cast<size_t>(kMaxRows));
+        i_recentMode = !i_hits.empty();
+    }
+    else if (i_groupMode || i_kindMode)
     {
         // "@" lists the classes, "#" lists the kinds; both are browsers.
         if (i_kindMode)
@@ -698,6 +719,10 @@ void PinyinPopup::Show()
     i_shown = true;
     SetForegroundWindow(i_hWnd);
     EnsureDpi(); // the popup may have landed on a monitor with another scaling
+    // ResetSearch() clears the box without firing EN_CHANGE, so the "recently
+    // used" list has to be asked for explicitly - and only now, because it grows
+    // the window relative to the position chosen above.
+    RunSearch();
     SetFocus(i_editH);
 }
 
@@ -926,7 +951,16 @@ void PinyinPopup::DrawRow(const DRAWITEMSTRUCT& dis)
         }
         const PinyinEntry& e = kPinyinEntries[i_hits[dis.itemID].index];
         name = Utf8ToWide(e.name);
-        secondary = Utf8ToWide(e.english);
+        if (i_recentMode)
+        {
+            // Hit::score carries the use count in this mode, which also explains
+            // why these rows are on screen before anything was typed.
+            secondary = L"用过 " + std::to_wstring(i_hits[dis.itemID].score) + L" 次";
+        }
+        else
+        {
+            secondary = Utf8ToWide(e.english);
+        }
         badge = e.is_preset ? L"预设" : L"效果";
     }
 

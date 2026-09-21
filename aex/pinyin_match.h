@@ -26,14 +26,16 @@
 namespace pinyin {
 
 // ---------------------------------------------------------------------------
-// Usage history: the entries the user actually applies come back to the top.
+// Usage history: the entries the user actually applies come back to the top,
+// and the popup offers them as soon as it opens.
 //
 // Keyed by NAME, not by row index, so regenerating the index (a new plug-in was
 // installed) does not shuffle the history.
 //
-// The bonus stays inside the tiers Score() produces: it reorders equally
-// relevant matches (which is what "the one I always use" needs) without letting
-// a weak substring match jump above an exact one.
+// Two things are kept per entry: how many times it was used (the ranking bonus)
+// and a use counter that says which one was used last (the "recent" list). The
+// bonus stays inside the tiers Score() produces: it reorders equally relevant
+// matches without letting a weak substring match jump above an exact one.
 // ---------------------------------------------------------------------------
 
 inline int UsageBoost(int count)
@@ -45,9 +47,16 @@ inline int UsageBoost(int count)
 class UsageTable
 {
 public:
-    void Clear() { i_entries.clear(); }
+    UsageTable() : i_clock(0) {}
 
-    void Add(const char* name, int count)
+    void Clear()
+    {
+        i_entries.clear();
+        i_clock = 0;
+    }
+
+    // `lastUsed` is 0 for histories saved before recency existed.
+    void Add(const char* name, int count, int lastUsed = 0)
     {
         if (!name || !*name || count <= 0)
         {
@@ -58,31 +67,35 @@ public:
         if (at < i_entries.size() && i_entries[at].name == key)
         {
             i_entries[at].count += count;
+            if (lastUsed > i_entries[at].lastUsed)
+            {
+                i_entries[at].lastUsed = lastUsed;
+            }
         }
         else
         {
             Entry e;
             e.name = key;
             e.count = count;
+            e.lastUsed = lastUsed;
             i_entries.insert(i_entries.begin() + static_cast<ptrdiff_t>(at), e);
+        }
+        if (lastUsed > i_clock)
+        {
+            i_clock = lastUsed;
         }
     }
 
-    void Bump(const char* name) { Add(name, 1); }
+    // Record one use: it counts for the bonus and becomes the most recent.
+    void Bump(const char* name)
+    {
+        Add(name, 1, i_clock + 1);
+    }
 
     int Count(const char* name) const
     {
-        if (!name || !*name)
-        {
-            return 0;
-        }
-        const std::string key(name);
-        const size_t at = LowerBound(key);
-        if (at < i_entries.size() && i_entries[at].name == key)
-        {
-            return i_entries[at].count;
-        }
-        return 0;
+        const Entry* e = Find(name);
+        return e ? e->count : 0;
     }
 
     int Boost(const char* name) const { return UsageBoost(Count(name)); }
@@ -91,13 +104,30 @@ public:
 
     const std::string& NameAt(size_t i) const { return i_entries[i].name; }
     int CountAt(size_t i) const { return i_entries[i].count; }
+    int LastUsedAt(size_t i) const { return i_entries[i].lastUsed; }
 
 private:
     struct Entry
     {
         std::string name;
         int count;
+        int lastUsed;
     };
+
+    const Entry* Find(const char* name) const
+    {
+        if (!name || !*name)
+        {
+            return NULL;
+        }
+        const std::string key(name);
+        const size_t at = LowerBound(key);
+        if (at < i_entries.size() && i_entries[at].name == key)
+        {
+            return &i_entries[at];
+        }
+        return NULL;
+    }
 
     size_t LowerBound(const std::string& key) const
     {
@@ -119,6 +149,7 @@ private:
     }
 
     std::vector<Entry> i_entries; // sorted by name, so lookups are a binary search
+    int i_clock;                  // grows with every Bump; also seeds from a load
 };
 
 // Lowercase and drop separators, but KEEP non-ASCII bytes so that typing actual
@@ -239,8 +270,64 @@ inline int Score(const PinyinEntry& e, const std::string& q, const UsageTable* u
 struct Hit
 {
     int index;
-    int score;
+    int score; // in the recent list this carries the use count instead
 };
+
+// Row index of an entry by display name, or -1 when it is not in the table
+// (the plug-in or preset behind a history entry may be gone).
+inline int FindEntryIndex(const char* name)
+{
+    if (!name || !*name)
+    {
+        return -1;
+    }
+    for (int i = 0; i < kPinyinEntryCount; ++i)
+    {
+        if (std::strcmp(kPinyinEntries[i].name, name) == 0)
+        {
+            return i;
+        }
+    }
+    return -1;
+}
+
+// The most recently used entries, newest first: what the popup shows before
+// anything has been typed. Hit::score carries each entry's use count so the row
+// can say how often it was used.
+inline void RecentHits(const UsageTable& usage, std::vector<Hit>& out, size_t limit)
+{
+    out.clear();
+    if (usage.Size() == 0 || limit == 0)
+    {
+        return;
+    }
+
+    std::vector<size_t> order(usage.Size());
+    for (size_t i = 0; i < order.size(); ++i)
+    {
+        order[i] = i;
+    }
+    std::stable_sort(order.begin(), order.end(), [&usage](size_t a, size_t b) {
+        return usage.LastUsedAt(a) > usage.LastUsedAt(b);
+    });
+    if (order.size() > limit)
+    {
+        order.resize(limit);
+    }
+
+    for (const size_t at : order)
+    {
+        const int index = FindEntryIndex(usage.NameAt(at).c_str());
+        if (index < 0)
+        {
+            continue; // that entry no longer exists
+        }
+        Hit h;
+        h.index = index;
+        h.score = usage.CountAt(at);
+        out.push_back(h);
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Classes ("@group"), like JEI's mod filter.

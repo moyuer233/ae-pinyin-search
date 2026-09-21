@@ -38,7 +38,8 @@
 - 查询语法是**多过滤器**（`pinyin_match.h` 的 `Query`）：`@` 选类（`@厂商` / `@名字前缀`，`@` 单独打列出所有类）、`#` 选类型（`#效果` / `#预设`，`#` 单独打列出类型）、其余当自由文本；**三者可任意顺序组合**（`@bfx #效果 blur`）。
   浏览行（`@`/`#` 出来的行）回车不是应用，而是把该过滤填进搜索框（`GroupInfo::key`）。加新维度时照这个模式：解析器收成过滤器字段 + 一个"单独打就列出来"的浏览器入口，别做成互斥的模式枚举。
 - `@` 别名表由 `tools\gen_pinyin_data.py` 从索引自动生成（手动短名在它顶部的 `MANUAL_ALIASES`），**新厂商不用改 C++**。
-- 浮窗交互定版：列表最多 10 行（`kMaxRows`）、靠近屏幕底部时**向上展开**（`i_growUp` + 钉住底边）、**单击即应用**（`WM_LBUTTONUP`；不能用 `LBN_SELCHANGE` —— 点已经是当前的那行不发通知）。
+- 浮窗交互定版：列表最多 10 行（`kMaxRows`）、靠近屏幕底部时**向上展开**（`i_growUp` + 钉住底边）、**单击即应用**（`WM_LBUTTONUP`；不能用 `LBN_SELCHANGE` —— 点已经是当前的那行不发通知）、**空查询显示最近使用**（`RecentHits`，按 `UsageTable` 的 `lastUsed` 降序取 `kMaxRows` 个，`Hit::score` 在该模式下装的是使用次数）。
+  `ResetSearch()` 清空文本不会触发 `EN_CHANGE`，所以 `Show()` 里必须显式再调一次 `RunSearch()`，且要在定位之后（它会按 `i_posY`/`i_growUp` 把窗口撑开）。
 - 诊断：加载/热键/钩子/应用失败都会写 `%TEMP%\AEPinyinSearch.log`（ASCII），出问题先看它；常用记录在 `%APPDATA%\AEPinyinSearch\usage.tsv`。
 
 ## 已排除的路线（别再试）

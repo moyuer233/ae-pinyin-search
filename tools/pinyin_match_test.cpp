@@ -354,6 +354,60 @@ int main()
         Check(reloaded.Count(loser) == 15, "history survives a save/load round trip");
     }
 
+    // Recency: the popup shows the most recently used entries when it opens,
+    // newest first, and the list resolves back to table rows.
+    {
+        pinyin::UsageTable recent;
+        std::vector<pinyin::Hit> plain;
+        pinyin::SearchQuery("mohu", plain, 8);
+        Check(plain.size() >= 3, "enough rows to play with recency");
+
+        const char* a = kPinyinEntries[plain[0].index].name;
+        const char* b = kPinyinEntries[plain[1].index].name;
+        const char* c = kPinyinEntries[plain[2].index].name;
+
+        recent.Bump(a);
+        recent.Bump(b);
+        recent.Bump(c);
+        recent.Bump(a); // a is used twice, c was used last
+
+        std::vector<pinyin::Hit> order;
+        pinyin::RecentHits(recent, order, 10);
+        Check(order.size() == 3, "RecentHits returns what was used");
+        Check(std::strcmp(kPinyinEntries[order[0].index].name, a) == 0, "most recent use comes first");
+        Check(std::strcmp(kPinyinEntries[order[1].index].name, c) == 0, "then the one before it");
+        Check(std::strcmp(kPinyinEntries[order[2].index].name, b) == 0, "oldest last");
+        Check(order[0].score == 2, "the recent row carries its use count");
+
+        pinyin::RecentHits(recent, order, 2);
+        Check(order.size() == 2, "RecentHits honours the limit");
+
+        // A history entry whose plug-in is gone must not crash the list.
+        pinyin::UsageTable stale;
+        stale.Bump("ThisEffectDoesNotExist");
+        pinyin::RecentHits(stale, order, 10);
+        Check(order.empty(), "RecentHits skips entries that are no longer installed");
+
+        // The save/load round trip keeps both numbers (3 columns).
+        pinyin::UsageTable reloaded;
+        for (size_t i = 0; i < recent.Size(); ++i)
+        {
+            reloaded.Add(recent.NameAt(i).c_str(), recent.CountAt(i), recent.LastUsedAt(i));
+        }
+        pinyin::RecentHits(reloaded, order, 10);
+        Check(order.size() == 3 && std::strcmp(kPinyinEntries[order[0].index].name, a) == 0,
+              "recency survives a save/load round trip");
+
+        // Old two-column histories still count (their order is unknown).
+        pinyin::UsageTable old;
+        old.Add(a, 4);
+        Check(old.Count(a) == 4 && old.LastUsedAt(0) == 0, "a legacy row keeps its count");
+        old.Bump(b);
+        pinyin::RecentHits(old, order, 10);
+        Check(!order.empty() && std::strcmp(kPinyinEntries[order[0].index].name, b) == 0,
+              "a new use still outranks a legacy row");
+    }
+
     std::printf("\nfailures: %d\n", g_fail);
     return g_fail;
 }
