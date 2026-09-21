@@ -1,0 +1,21 @@
+# Generated data - reproducible from tools/
+build/
+
+# Raw scans dumped by tools (regenerable, and they carry machine paths)
+tools/_*.txt
+
+# Local deployment / diagnostic artifacts
+_backup_*/
+_deploy_backup_*/
+_diag_scripts_removed_*/
+_retired_*/
+_probe-*
+*.log
+*.prev
+*.prev2
+*.prev3
+
+# The CEP panel / ScriptUI / side-button tool the .aex replaced (see _retired_*)
+dist/
+sidekey/
+extension/
