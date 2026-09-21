@@ -64,8 +64,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\rebuild_aex.ps1 -Deplo
 - AE 预设目录 `Support Files\Presets\**\*.ffx`（预设名与相对路径）
 - 两个插件目录里的 `.aex` 文件名 + 所在厂商目录（第三方效果，本机 1534 条）
 
-拼音在构建期用 `pypinyin` 算好写进 C++ 表，运行时不依赖任何东西。
-
 ## 说明与限制
 
 - 目前只有 Windows 实现（UI 在 `Win\` 下，匹配层与索引是平台无关的）。
