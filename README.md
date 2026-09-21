@@ -1,6 +1,6 @@
-# AE 拼音搜索（After Effects 原生插件）
+# AE 拼音搜索
 
-给 After Effects 2026 用的拼音搜索浮窗。按快捷键或鼠标侧键唤出，在鼠标旁边弹出一个小条，打 `gsmh` 就出「高斯模糊」，
+给 After Effects 2026 用的拼音搜索浮窗。按快捷键或唤出，在鼠标旁边弹出一个小条，如：打 `gsmh` 就出「高斯模糊」，
 回车（或单击）应用到当前选中图层 —— 不用切输入法、不用打中文、不用在几百个效果里翻。
 
 **版本** v0.1.0 ｜ 平台 Windows ｜ AE 2026（26.x）｜ 产物 `AEPinyinSearch.aex`
@@ -23,7 +23,7 @@
 ## 装
 
 1. 从 [Releases](../../releases) 下载 `AEPinyinSearch.aex`。
-2. 放进 `<AE 安装目录>\Support Files\Plug-ins\Extensions\`（本机示例：`H:\adobe\Adobe After Effects 2026\Support Files\Plug-ins\Extensions\`）。
+2. 放进 `<AE 安装目录>\Support Files\Plug-ins\Extensions\`
    放这里不需要管理员权限；**别同时放两份**（两个实例会抢热键和鼠标钩子）。
 3. 重启 AE。
 
@@ -68,19 +68,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\rebuild_aex.ps1 -Deplo
 
 ## 说明与限制
 
-- 源码基于 Adobe AE SDK 的 **Panelator** 示例改造；Adobe 的版权声明保留在文件头。本仓库不含 AE SDK 本身。
-- 浮窗是插件自己创建的顶层窗口：AEGP 的面板套件（`AEGP_PanelSuite1`）没有"浮动"接口，做浮窗只能这么来。
 - 目前只有 Windows 实现（UI 在 `Win\` 下，匹配层与索引是平台无关的）。
 - 第三方效果名取的是插件目录里的 `.aex` 文件名，中文界面下 AE 显示的名字可能与它略有差异；预设应用依赖预设目录结构。
 
-## 许可与来源
-
-- 本项目自己写的文件（`aex/Win/`、`aex/pinyin_match.h`、`aex/pinyin_data.*`、`tools/`）：**MIT**，见 `LICENSE`。
-- `aex/AEPinyinSearch.cpp`、`aex/AEPinyinSearch.h`、`aex/AEPinyinSearch_Strings.cpp`、`aex/PT_Err.h` 保留 Adobe 版权头，
-  它们改写自 Adobe After Effects SDK 的 **Panelator** 示例。这些文件头里的 NOTICE 原文是
-  "Adobe permits you to use, modify, and distribute this file in accordance with the terms of the Adobe license
-  agreement accompanying it"，即按随附的 **AE SDK 许可协议**分发。
-- **AE SDK 本体（Headers / Util / 其余示例）不在本仓库**，构建时由 vcxproj 用相对路径指向你自己解压的 SDK 目录；
-  SDK 需要自己从 Adobe 获取。
-- 本项目与 Adobe 无隶属关系，也未获得 Adobe 的背书。
 
