@@ -1,34 +1,30 @@
 # AE 拼音搜索
 
-给 After Effects 2026 用的拼音搜索浮窗。按快捷键或唤出，在鼠标旁边弹出一个小条，如：打 `gsmh` 就出「高斯模糊」，
-回车（或单击）应用到当前选中图层 —— 不用切输入法、不用打中文、不用在几百个效果里翻。
-
-**版本** v0.2.0 ｜ 平台 Windows ｜ AE 2026（26.x）｜ 产物 `AEPinyinSearch.aex`
+给 After Effects 2026 用的拼音搜索浮窗。按快捷键或唤出，在鼠标旁边弹出条状输入框。
+如：打 `gsmh` 就出「高斯模糊」，回车（或单击）应用到当前选中图层，告别翻效果栏，频繁切换输入法。
 
 ## 特性
 
 - **唤出**：`Ctrl+Space` 全局热键（被输入法占用时自动退到 `Ctrl+Shift+Space`）、鼠标侧键 X1/X2、
   或 `窗口 > 拼音搜索` 菜单项（可在 AE 的 `编辑 > 键盘快捷键` 里自己绑）。
-- **弹在鼠标旁**，靠近屏幕底部时向上展开，列表最多 10 行；点 AE 别处自动关，`Esc` 直接关，应用成功后自动清空并关窗。
+- **位置**，鼠标旁，靠近屏幕底部时自动向上展开，列表最多 10 行；点别处自动关，`Esc`，`Ctrl+Space` 直接关，应用成功后自动清空并关窗。
 - **匹配**：全拼 `gaosimohu`、首字母 `gsmh`、中英混合 `gaussian`、模糊音（zh→z / ch→c / sh→s / ang→an / eng→en / ing→in）。
-- **`@` 分类**（像 Minecraft JEI 那样只看某一类）：
-  - `@` 单独打 → 列出所有类（Boris FX 481 / Sapphire 287 / Red Giant Universe 105 …），回车把该类填成 `@bfx`
+- **`@` 分类**（像MC的JEI模组那样）：
+  - `@` 单独打 → 列出所有类（Boris FX-481个 / Sapphire-287个 / Red Giant Universe-105个 …），回车把该类填成 `@bfx`
   - `@BCC` → 只看名字以 BCC 开头的那批；`@BFX` = `@Boris FX`，`@RGU` = `@Red Giant Universe`
-  - 裸写厂商名（`boris`）等价于 `@boris`，并且不会藏掉其它匹配
 - **`#` 类型**：`#效果` / `#预设`（也认 `#effect` / `#preset`）；`#` 单独打列出类型，回车把它填进搜索框。
 - **两个过滤可以同时用**，顺序随意，后面还能跟关键词：`@bfx #效果 blur` = Boris FX 的效果里再筛 blur。
-- **常用的排前面**：应用成功的条目会记一笔（`%APPDATA%\AEPinyinSearch\usage.tsv`，按名字记，重建索引也不丢），
-  同级里用得多的先出现；加权上限刻意小于相关度档位差，不会让弱匹配压过精确匹配。
-- **诊断**：加载、热键注册、钩子安装、应用失败都会写 `%TEMP%\AEPinyinSearch.log`。
+- **常用快捷搜索**：应用成功的条目会记一笔（`%APPDATA%\AEPinyinSearch\usage.tsv`，同级里用得多的先出现。
+- **日志**：加载、热键注册、钩子安装、应用失败自动导出到 `%TEMP%\AEPinyinSearch.log`。
 
-## 装
+## 安装
 
 1. 从 [Releases](https://github.com/moyuer233/ae-pinyin-search/releases) 下载 `AEPinyinSearch.aex`。
 2. 放进 `<AE 安装目录>\Support Files\Plug-ins\Extensions\`
    放这里不需要管理员权限；**别同时放两份**（两个实例会抢热键和鼠标钩子）。
 3. 重启 AE。
 
-## 用
+## 使用
 
 | 键 | 作用 |
 |---|---|
@@ -41,7 +37,6 @@
 | `回车` / 单击 | 应用到当前选中图层（预设走 `applyPreset`） |
 | `Esc` | 关窗 |
 
-没选图层时会弹一条中文提示，不会静默失败。
 
 ## 从源码构建
 
@@ -61,7 +56,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\rebuild_aex.ps1 -Deplo
 
 两个自检可以单独跑：`tools\build_match_test.cmd`（匹配层在 AE 外面跑，退出码＝失败数）、`python tools\verify_aex.py`（产物字符串/PE 探针）。
 
-## 索引怎么来
+## 索引机制
 
 - AE 自带中文词典 `Support Files\Dictionaries\zh_CN\after_effects_zh_CN.dat`（效果名）
 - AE 预设目录 `Support Files\Presets\**\*.ffx`（预设名与相对路径）
