@@ -35,9 +35,11 @@
   它依次跑：重扫插件目录 → 合并成 `build\ae-index.json` → 重新生成 `pinyin_data.h/.cpp`（含 `@` 分类别名）→ 匹配层自检 → 编 .aex → 探针校验 → 同步仓库镜像；**退出码＝失败步骤数**。
   索引是编译进 .aex 的，装了新效果不重建就搜不到。
 - 两个自检（退出码都是问题数）：`tools\build_match_test.cmd`（匹配层在 AE 外面跑，改了 `pinyin_match.h` 必跑）、`python tools\verify_aex.py`（产物探针）。
-- `@` 分类：`@厂商`（`@BFX`/`@RGU`…）或 `@名字前缀`（`@BCC`/`@S`）；`@` 单独打会列出所有类，回车把该类填成 `@key`。
-  别名表由 `tools\gen_pinyin_data.py` 从索引自动生成（手动短名在它顶部的 `MANUAL_ALIASES`），**新厂商不用改 C++**。
-- 诊断：加载/热键/钩子/应用失败都会写 `%TEMP%\AEPinyinSearch.log`（ASCII），出问题先看它。
+- 查询语法是**多过滤器**（`pinyin_match.h` 的 `Query`）：`@` 选类（`@厂商` / `@名字前缀`，`@` 单独打列出所有类）、`#` 选类型（`#效果` / `#预设`，`#` 单独打列出类型）、其余当自由文本；**三者可任意顺序组合**（`@bfx #效果 blur`）。
+  浏览行（`@`/`#` 出来的行）回车不是应用，而是把该过滤填进搜索框（`GroupInfo::key`）。加新维度时照这个模式：解析器收成过滤器字段 + 一个"单独打就列出来"的浏览器入口，别做成互斥的模式枚举。
+- `@` 别名表由 `tools\gen_pinyin_data.py` 从索引自动生成（手动短名在它顶部的 `MANUAL_ALIASES`），**新厂商不用改 C++**。
+- 浮窗交互定版：列表最多 10 行（`kMaxRows`）、靠近屏幕底部时**向上展开**（`i_growUp` + 钉住底边）、**单击即应用**（`WM_LBUTTONUP`；不能用 `LBN_SELCHANGE` —— 点已经是当前的那行不发通知）。
+- 诊断：加载/热键/钩子/应用失败都会写 `%TEMP%\AEPinyinSearch.log`（ASCII），出问题先看它；常用记录在 `%APPDATA%\AEPinyinSearch\usage.tsv`。
 
 ## 已排除的路线（别再试）
 
