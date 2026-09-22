@@ -34,13 +34,20 @@
 - **装完新插件/预设后重建（一条命令）**：`powershell -NoProfile -ExecutionPolicy Bypass -File tools\rebuild_aex.ps1`（加 `-Deploy` 连部署一起做）。
   它依次跑：重扫插件目录 → 合并成 `build\ae-index.json` → 重新生成 `pinyin_data.h/.cpp`（含 `@` 分类别名）→ 匹配层自检 → 编 .aex → 探针校验 → 同步仓库镜像；**退出码＝失败步骤数**。
   索引是编译进 .aex 的，装了新效果不重建就搜不到。
-- 两个自检（退出码都是问题数）：`tools\build_match_test.cmd`（匹配层在 AE 外面跑，改了 `pinyin_match.h` 必跑）、`python tools\verify_aex.py`（产物探针）。
+- **输入缺失必须让链失败，不许静默缩水**：三个索引脚本都有下限断言（扫描根不存在、条目数低于下限、`Format`/`Keyframe`/`Extensions` 的行混进索引 ⇒ 非零退出），`verify_aex.py` 还会比"产物比源码新"（防止探针验的是上一版 `.aex`）。加新脚本照这个来：**宁可失败，也不要一个全绿的假成功**。
+- 路径统一从 `tools\ae_paths.py` 取（Python）或环境变量取（PS/cmd）：`AE_INSTALL_DIR` / `AE_SDK_DIR` / `AE_PLUGIN_BUILD_DIR` / `AE_MEDIACORE` / `MSBUILD_EXE` / `DUMPBIN_EXE` / `VCVARS64`。**新脚本别再写死盘符与本机路径**（换机器就该只设环境变量）。
+- 两个自检（退出码都是问题数）：`tools\build_match_test.cmd`（匹配层在 AE 外面跑，改了 `pinyin_match.h` 必跑）、`python tools\verify_aex.py`（产物探针：字符串分编码、PE 导入导出、产物新鲜度、版本串、按索引比对厂商名）。
 - 查询语法是**多过滤器**（`pinyin_match.h` 的 `Query`）：`@` 选类（`@厂商` / `@名字前缀`，`@` 单独打列出所有类）、`#` 选类型（`#效果` / `#预设`，`#` 单独打列出类型）、其余当自由文本；**三者可任意顺序组合**（`@bfx #效果 blur`）。
-  浏览行（`@`/`#` 出来的行）回车不是应用，而是把该过滤填进搜索框（`GroupInfo::key`）。加新维度时照这个模式：解析器收成过滤器字段 + 一个"单独打就列出来"的浏览器入口，别做成互斥的模式枚举。
-- `@` 别名表由 `tools\gen_pinyin_data.py` 从索引自动生成（手动短名在它顶部的 `MANUAL_ALIASES`），**新厂商不用改 C++**。
-- 浮窗交互定版：列表最多 10 行（`kMaxRows`）、靠近屏幕底部时**向上展开**（`i_growUp` + 钉住底边）、**单击即应用**（`WM_LBUTTONUP`；不能用 `LBN_SELCHANGE` —— 点已经是当前的那行不发通知）、**空查询显示最近使用**（`RecentHits`，按 `UsageTable` 的 `lastUsed` 降序取 `kMaxRows` 个，`Hit::score` 在该模式下装的是使用次数）。
+  **每个维度各只认第一个 token**（`@bfx @rgu` 只按 `@bfx` 过滤，第二个 `@` 被忽略）—— 这是有意的口径，改多值要连 UI 提示一起改。
+  浏览行（`@`/`#` 出来的行）回车不是应用，而是把该过滤填进搜索框（`GroupInfo::key`）。加新维度时照这个模式：解析器收成过滤器字段 + 一个"单独打就列出来"的浏览器入口，别做成互斥的模式枚举；**浏览器模式的"取哪一份行数据"必须和填列表、算行数、绘制三处用同一个判断**（`i_groupMode || i_kindMode`）—— 漏一处就是"打 `#` 出空白窗"这类 bug（曾真实发生）。
+- `@` 别名表由 `tools\gen_pinyin_data.py` 从索引自动生成（手动短名在它顶部的 `MANUAL_ALIASES`），**新厂商不用改 C++**；别名撞车会让这一步失败并要求加一条手动别名，别改成"自动兜底继续写"。
+- 索引扫描跳过三个非效果目录：`Format`（导入导出器）、`Keyframe`（关键帧助手）、`Extensions`（扩展管理器，本插件自己也在里面）—— 见 `tools\build_aex_effects.py` 的 `NON_EFFECT_FOLDERS`。**这些 .aex 不进效果菜单，收进索引只会变成"搜到却应用失败"。**
+- 浮窗交互定版：列表最多 10 行（`kMaxRows`）、靠近屏幕底部时**向上展开**（`i_growUp`）、**向上展开时列表在输入框上方、输入框停在唤出位置**（`Layout()` 按 `i_growUp` 换上下顺序，`ResizeToRows()` 钉住的是输入框那一行的位置 —— 早期版本把输入框放顶部，结果它随结果行数往上跑）、**单击即应用**（`WM_LBUTTONUP`；不能用 `LBN_SELCHANGE` —— 点已经是当前的那行不发通知）、**空查询显示最近使用**（`RecentHits`，按 `UsageTable` 的 `lastUsed` 降序取 `kMaxRows` 个，`Hit::score` 在该模式下装的是使用次数）。
   `ResetSearch()` 清空文本不会触发 `EN_CHANGE`，所以 `Show()` 里必须显式再调一次 `RunSearch()`，且要在定位之后（它会按 `i_posY`/`i_growUp` 把窗口撑开）。
-- 诊断：加载/热键/钩子/应用失败都会写 `%TEMP%\AEPinyinSearch.log`（ASCII），出问题先看它；常用记录在 `%APPDATA%\AEPinyinSearch\usage.tsv`。
+- **键盘焦点只在输入框上**：点列表（含点空白、点过滤行）之后要把焦点还给 `i_editH`（`ListProc` + `ApplySelected`），否则 Esc/回车/打字全失效 —— 列表自己没有任何按键处理。
+- **`AEPinyinLog` 不许从低级钩子回调里调**（系统等回调、超时会摘钩）：钩子只 `PostMessage`，日志由 pump 线程写；日志超过 1 MB 自动重开。
+- 版本号在 `aex\AEPinyinSearch.cpp` 的 `kVersion`（加载时写进日志，产物里唯一能认出"装的是哪版"的东西）：**改了对外产物就同步它 + README + Release 说明**。
+- 诊断：加载/热键/钩子/应用失败都会写 `%TEMP%\AEPinyinSearch.log`（ASCII），出问题先看它；常用记录在 `%APPDATA%\AEPinyinSearch\usage.tsv`（读写都走宽字符路径，别用 `fopen_s` 开 UTF-8 路径）。
 
 ## 已排除的路线（别再试）
 
