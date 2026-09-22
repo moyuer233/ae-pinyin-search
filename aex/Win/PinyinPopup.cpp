@@ -181,6 +181,7 @@ PinyinPopup::PinyinPopup(SPBasicSuite* spbP, AEGP_PluginID pluginID)
       i_width(0),
       i_posX(0),
       i_posY(0),
+      i_shownTick(0),
       i_growUp(false),
       i_shown(false),
       i_activated(false),
@@ -717,6 +718,7 @@ void PinyinPopup::Show()
     i_prevForeground = GetForegroundWindow();
     SetWindowPos(i_hWnd, HWND_TOP, x, y, w, barH, SWP_SHOWWINDOW | SWP_NOACTIVATE);
     i_shown = true;
+    i_shownTick = GetTickCount();
     SetForegroundWindow(i_hWnd);
     EnsureDpi(); // the popup may have landed on a monitor with another scaling
     // ResetSearch() clears the box without firing EN_CHANGE, so the "recently
@@ -1137,7 +1139,12 @@ LRESULT PinyinPopup::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPar
     case WM_ACTIVATE:
         if (LOWORD(wParam) == WA_INACTIVE)
         {
-            if (i_shown && i_activated)
+            // The click that opened the popup can activate the host again a few
+            // milliseconds later (a mouse side button is a press AND a release,
+            // and the release lands on the window underneath). Without this
+            // grace period the popup closed the instant it appeared.
+            const bool settled = (GetTickCount() - i_shownTick) > 300;
+            if (i_shown && i_activated && settled)
             {
                 Hide(); // click anywhere else and it goes away, like an IME candidate bar
             }

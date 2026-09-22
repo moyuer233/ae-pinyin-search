@@ -13,6 +13,15 @@
 #include "AEPinyinSearch.h"
 #include "DiagLog.h"
 
+// The global mouse hook and the hotkey live on a thread this plug-in owns.
+//
+// A low-level hook callback is delivered on the thread that installed the hook,
+// and the input system waits for it (LowLevelHooksTimeout, 25 s on this machine)
+// if that thread is busy. Installing it on After Effects' main thread therefore
+// means: whenever AE is busy - selecting a layer, editing a value - a mouse
+// event can be held up. On our own thread, which always pumps, that can't
+// happen; the callbacks only post a message to the window that lives on AE's
+// main thread, and AE handles it when it gets around to it.
 class AEPinyinSearch
 {
 public:
@@ -22,86 +31,88 @@ public:
     AEGP_SuiteHandler i_sp;
     AEGP_Command i_command;
     PinyinPopup* i_popup;
-    HWND i_hotkeyWnd;
-    HHOOK i_mouseHook;
+
+    HWND i_pumpWnd;      // AE main thread: receives the marshalled toggle
+    HANDLE i_inputThread; // our thread: owns the hook + the hotkey
+    DWORD i_inputThreadId;
     bool i_hotkeyWithShift;
     bool i_hotkeyRegistered;
 
+    static AEPinyinSearch* s_instance;
+    static const UINT kMsgToggle = WM_APP + 1;
+
     /// STATIC BINDERS
+    static LRESULT CALLBACK S_PumpWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
+    {
+        AEPinyinSearch* self = reinterpret_cast<AEPinyinSearch*>(GetWindowLongPtrA(hWnd, GWLP_USERDATA));
+        if (!self)
+        {
+            return DefWindowProc(hWnd, message, wParam, lParam);
+        }
+        if (message == kMsgToggle)
+        {
+            // wParam carries the tick count from when the request was posted, so
+            // "AE main thread was busy for X ms" shows up in the log.
+            const DWORD posted = static_cast<DWORD>(wParam);
+            const DWORD waited = GetTickCount() - posted;
+            if (waited > 200)
+            {
+                AEPinyinLog("toggle: AE main thread took %lu ms to get to it", waited);
+            }
+            self->TogglePopup();
+            return 0;
+        }
+        return DefWindowProcA(hWnd, message, wParam, lParam);
+    }
+
     static LRESULT CALLBACK S_HotkeyWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     {
         AEPinyinSearch* self = reinterpret_cast<AEPinyinSearch*>(GetWindowLongPtrA(hWnd, GWLP_USERDATA));
-        if (self)
+        if (self && message == WM_HOTKEY && wParam == 1)
         {
-            return self->HotkeyWndProc(hWnd, message, wParam, lParam);
-        }
-        return DefWindowProc(hWnd, message, wParam, lParam);
-    }
-
-    LRESULT HotkeyWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
-    {
-        if (message == WM_HOTKEY && wParam == 1)
-        {
-            // A global hotkey also fires while some other app is in front; the
+            // A global hotkey also fires while another app is in front; the
             // search bar belongs to AE, so ignore those.
-            if (IsAEForeground())
+            if (AEPinyinSearch::IsAEForeground())
             {
-                TogglePopup();
+                AEPinyinLog("toggle: hotkey");
+                self->ToggleFromAnyThread();
             }
             return 0;
         }
-        return DefWindowProc(hWnd, message, wParam, lParam);
+        return DefWindowProcA(hWnd, message, wParam, lParam);
     }
 
-    // Register a global hotkey so the search bar can be summoned without first
-    // going through the host's Keyboard Shortcuts dialog. Ctrl+Space is the
-    // requested binding; it is also the Windows IME switch, so if the OS refuses
-    // it we fall back to Ctrl+Shift+Space.
-    void RegisterHotkey()
+    // Mouse side buttons: a low-level hook lets XBUTTON1/2 summon the search bar
+    // without any vendor driver remapping. This runs on the input thread.
+    //
+    // Only the press is swallowed, and that is enough: activation follows the
+    // press (WM_MOUSEACTIVATE), so if the host never sees the press it will not
+    // take the foreground back and the popup stays open. The release needs no
+    // handling - a lone mouse-up does not activate anything.
+    static LRESULT CALLBACK S_MouseProc(int nCode, WPARAM wParam, LPARAM lParam)
     {
-        static const char* kClassName = "AEPinyinSearchHotkeyWnd";
+        if (nCode >= 0 && wParam == WM_XBUTTONDOWN && s_instance && IsAEForeground())
+        {
+            const MSLLHOOKSTRUCT* ms = reinterpret_cast<const MSLLHOOKSTRUCT*>(lParam);
+            const int which = static_cast<int>((ms->mouseData >> 16) & 0xFFFF);
+            if (which == XBUTTON1 || which == XBUTTON2)
+            {
+                AEPinyinLog("toggle: mouse x-button");
+                s_instance->ToggleFromAnyThread();
+                return 1; // do not let the host see the press
+            }
+        }
+        return CallNextHookEx(NULL, nCode, wParam, lParam);
+    }
 
-        // Use the DLL's own instance, not the host's: the window class and the
-        // window must belong to the same module as this code.
+    static HMODULE OwnModule(const void* addressInThisDll)
+    {
         HMODULE module = NULL;
         GetModuleHandleExW(
             GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-            reinterpret_cast<LPCWSTR>(&AEPinyinSearch::S_HotkeyWndProc), &module);
-
-        WNDCLASSA wc = {};
-        wc.lpfnWndProc = S_HotkeyWndProc;
-        wc.hInstance = reinterpret_cast<HINSTANCE>(module);
-        wc.lpszClassName = kClassName;
-        if (!RegisterClassA(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
-        {
-            AEPinyinLog("hotkey: RegisterClassA failed, err=%lu", GetLastError());
-        }
-
-        i_hotkeyWnd = CreateWindowExA(
-            0, kClassName, "", 0, 0, 0, 0, 0, HWND_MESSAGE, NULL, reinterpret_cast<HINSTANCE>(module), NULL);
-        if (!i_hotkeyWnd)
-        {
-            AEPinyinLog("hotkey: message-only window failed, err=%lu", GetLastError());
-            return;
-        }
-        SetWindowLongPtrA(i_hotkeyWnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
-
-        if (RegisterHotKey(i_hotkeyWnd, 1, MOD_CONTROL, VK_SPACE))
-        {
-            i_hotkeyWithShift = false;
-            i_hotkeyRegistered = true;
-        }
-        else if (RegisterHotKey(i_hotkeyWnd, 1, MOD_CONTROL | MOD_SHIFT, VK_SPACE))
-        {
-            i_hotkeyWithShift = true;
-            i_hotkeyRegistered = true;
-        }
-        AEPinyinLog(
-            "hotkey: %s",
-            i_hotkeyRegistered ? (i_hotkeyWithShift ? "ctrl+shift+space" : "ctrl+space") : "NOT registered");
+            reinterpret_cast<LPCWSTR>(addressInThisDll), &module);
+        return module;
     }
-
-    static AEPinyinSearch* s_instance;
 
     static bool IsAEForeground()
     {
@@ -114,6 +125,16 @@ public:
         return pid == GetCurrentProcessId();
     }
 
+    // Safe from any thread: the window belongs to AE's main thread.
+    void ToggleFromAnyThread()
+    {
+        if (i_pumpWnd)
+        {
+            PostMessageA(i_pumpWnd, kMsgToggle, static_cast<WPARAM>(GetTickCount()), 0);
+        }
+    }
+
+    // Must run on AE's main thread (it owns i_popup).
     void TogglePopup()
     {
         if (i_popup)
@@ -122,49 +143,121 @@ public:
         }
     }
 
-    // Mouse side buttons: a low-level hook lets XBUTTON1/2 summon the search bar
-    // without any vendor driver remapping. The callback only inspects the
-    // message, so it stays cheap.
-    static LRESULT CALLBACK S_MouseProc(int nCode, WPARAM wParam, LPARAM lParam)
+    // The input thread: register the hook + the hotkey, then pump forever. Both
+    // callbacks are then served by a thread that is never busy doing AE work.
+    static DWORD WINAPI S_InputThread(LPVOID param)
     {
-        if (nCode >= 0 && wParam == WM_XBUTTONDOWN && s_instance && IsAEForeground())
+        AEPinyinSearch* self = reinterpret_cast<AEPinyinSearch*>(param);
+        HMODULE module = OwnModule(reinterpret_cast<const void*>(&AEPinyinSearch::S_MouseProc));
+
+        // --- global hotkey -------------------------------------------------
+        static const char* kHotkeyClass = "AEPinyinSearchHotkeyWnd";
+        WNDCLASSA wc = {};
+        wc.lpfnWndProc = S_HotkeyWndProc;
+        wc.hInstance = reinterpret_cast<HINSTANCE>(module);
+        wc.lpszClassName = kHotkeyClass;
+        if (!RegisterClassA(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
         {
-            const MSLLHOOKSTRUCT* ms = reinterpret_cast<const MSLLHOOKSTRUCT*>(lParam);
-            const int which = static_cast<int>((ms->mouseData >> 16) & 0xFFFF);
-            if (which == XBUTTON1 || which == XBUTTON2)
+            AEPinyinLog("hotkey: RegisterClassA failed, err=%lu", GetLastError());
+        }
+        HWND hotkeyWnd = CreateWindowExA(
+            0, kHotkeyClass, "", 0, 0, 0, 0, 0, HWND_MESSAGE, NULL, reinterpret_cast<HINSTANCE>(module), NULL);
+        if (hotkeyWnd)
+        {
+            SetWindowLongPtrA(hotkeyWnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+            if (RegisterHotKey(hotkeyWnd, 1, MOD_CONTROL, VK_SPACE))
             {
-                s_instance->TogglePopup();
+                self->i_hotkeyWithShift = false;
+                self->i_hotkeyRegistered = true;
+            }
+            else if (RegisterHotKey(hotkeyWnd, 1, MOD_CONTROL | MOD_SHIFT, VK_SPACE))
+            {
+                self->i_hotkeyWithShift = true;
+                self->i_hotkeyRegistered = true;
             }
         }
-        return CallNextHookEx(NULL, nCode, wParam, lParam);
+        else
+        {
+            AEPinyinLog("hotkey: message-only window failed, err=%lu", GetLastError());
+        }
+        AEPinyinLog(
+            "hotkey: %s",
+            self->i_hotkeyRegistered ? (self->i_hotkeyWithShift ? "ctrl+shift+space" : "ctrl+space")
+                                     : "NOT registered");
+
+        // --- mouse side buttons --------------------------------------------
+        HHOOK hook = SetWindowsHookExA(WH_MOUSE_LL, S_MouseProc, reinterpret_cast<HINSTANCE>(module), 0);
+        AEPinyinLog("mouse hook: %s (this thread only)", hook ? "installed" : "FAILED");
+
+        MSG msg;
+        BOOL got = FALSE;
+        while ((got = GetMessageA(&msg, NULL, 0, 0)) > 0)
+        {
+            TranslateMessage(&msg);
+            DispatchMessageA(&msg);
+        }
+
+        // Hand everything back explicitly rather than trusting thread teardown.
+        if (hook)
+        {
+            UnhookWindowsHookEx(hook);
+        }
+        if (hotkeyWnd)
+        {
+            UnregisterHotKey(hotkeyWnd, 1);
+            DestroyWindow(hotkeyWnd);
+        }
+        AEPinyinLog("input thread: exiting");
+        return 0;
     }
 
-    void RegisterMouseHook()
+    void StartInputThread()
     {
-        s_instance = this;
-        HMODULE module = NULL;
-        GetModuleHandleExW(
-            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-            reinterpret_cast<LPCWSTR>(&AEPinyinSearch::S_MouseProc), &module);
-        i_mouseHook = SetWindowsHookExA(WH_MOUSE_LL, S_MouseProc, reinterpret_cast<HINSTANCE>(module), 0);
-        if (!i_mouseHook)
+        i_inputThread = CreateThread(NULL, 0, &AEPinyinSearch::S_InputThread, this, 0, &i_inputThreadId);
+        if (!i_inputThread)
         {
-            AEPinyinLog("mouse hook: SetWindowsHookExA failed, err=%lu", GetLastError());
+            AEPinyinLog("input thread: CreateThread failed, err=%lu", GetLastError());
         }
+    }
+
+    bool CreatePumpWindow()
+    {
+        static const char* kPumpClass = "AEPinyinSearchPumpWnd";
+        HMODULE module = OwnModule(reinterpret_cast<const void*>(&AEPinyinSearch::S_PumpWndProc));
+
+        WNDCLASSA wc = {};
+        wc.lpfnWndProc = S_PumpWndProc;
+        wc.hInstance = reinterpret_cast<HINSTANCE>(module);
+        wc.lpszClassName = kPumpClass;
+        if (!RegisterClassA(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
+        {
+            AEPinyinLog("pump: RegisterClassA failed, err=%lu", GetLastError());
+            return false;
+        }
+        i_pumpWnd = CreateWindowExA(
+            0, kPumpClass, "", 0, 0, 0, 0, 0, HWND_MESSAGE, NULL, reinterpret_cast<HINSTANCE>(module), NULL);
+        if (!i_pumpWnd)
+        {
+            AEPinyinLog("pump: message-only window failed, err=%lu", GetLastError());
+            return false;
+        }
+        SetWindowLongPtrA(i_pumpWnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
+        return true;
     }
 
     void ReleaseEverything()
     {
-        if (i_mouseHook)
+        if (i_inputThread)
         {
-            UnhookWindowsHookEx(i_mouseHook);
-            i_mouseHook = NULL;
+            PostThreadMessageA(i_inputThreadId, WM_QUIT, 0, 0);
+            WaitForSingleObject(i_inputThread, 3000);
+            CloseHandle(i_inputThread);
+            i_inputThread = NULL;
         }
-        if (i_hotkeyWnd)
+        if (i_pumpWnd)
         {
-            UnregisterHotKey(i_hotkeyWnd, 1);
-            DestroyWindow(i_hotkeyWnd);
-            i_hotkeyWnd = NULL;
+            DestroyWindow(i_pumpWnd);
+            i_pumpWnd = NULL;
         }
         delete i_popup;
         i_popup = NULL;
@@ -212,7 +305,7 @@ public:
             return A_Err_NONE;
         }
         self->ReleaseEverything();
-        AEPinyinLog("plugin: released hook/hotkey/window on host death");
+        AEPinyinLog("plugin: released input thread, hook, hotkey and windows on host death");
         return A_Err_NONE;
     }
 
@@ -221,8 +314,9 @@ public:
           i_pluginID(pluginID),
           i_sp(pica_basicP),
           i_popup(NULL),
-          i_hotkeyWnd(NULL),
-          i_mouseHook(NULL),
+          i_pumpWnd(NULL),
+          i_inputThread(NULL),
+          i_inputThreadId(0),
           i_hotkeyWithShift(false),
           i_hotkeyRegistered(false)
     {
@@ -237,10 +331,14 @@ public:
 
         i_popup = new PinyinPopup(pica_basicP, pluginID);
 
-        RegisterHotkey();
-        RegisterMouseHook();
+        s_instance = this;
+        if (CreatePumpWindow())
+        {
+            StartInputThread();
+        }
 
-        AEPinyinLog("plugin: loaded (popup=%p, mouse hook=%p)", (void*)i_popup, (void*)i_mouseHook);
+        AEPinyinLog("plugin: loaded (popup=%p, pump=%p, input thread=%lu)", (void*)i_popup, (void*)i_pumpWnd,
+                    i_inputThreadId);
     }
 
     void CommandHook(

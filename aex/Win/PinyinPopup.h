@@ -92,6 +92,7 @@ private:
     int i_width;
     int i_posX; // top-left chosen when the popup was shown; the list grows from
     int i_posY; // there, upwards when i_growUp is set
+    DWORD i_shownTick; // grace period against the click that opened it
     bool i_growUp;
     bool i_shown;
     bool i_activated;
