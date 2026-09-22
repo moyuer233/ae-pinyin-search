@@ -7,6 +7,14 @@ tools/_*.txt
 # Python bytecode from running the tools
 __pycache__/
 
+# Local agent instructions and one-off scaffolding: they describe this machine's
+# layout and how the work is done here, not the plug-in. Keep them on disk, out
+# of the repository.
+AGENTS.md
+CLAUDE.md
+save.ps1
+save.cmd
+
 # Local deployment / diagnostic artifacts
 _backup_*/
 _deploy_backup_*/
