@@ -31,7 +31,9 @@ public:
     ~PinyinPopup();
 
     // Optional: makes the rows show, and the apply use, the host's names.
-    void SetEffectNames(const EffectNames* names) { i_effectNames = names; }
+    // Not const: the table is built lazily on the first Show() (the host's
+    // plug-ins may not all be registered yet while this plug-in is loading).
+    void SetEffectNames(EffectNames* names) { i_effectNames = names; }
 
     // Show it if hidden, hide it if shown.
     void Toggle();
@@ -46,6 +48,7 @@ private:
     PinyinPopup& operator=(const PinyinPopup&);
 
     bool Create();
+    void ReleaseGdi();
     void Layout();
     void ResizeToRows(int rows);
     void EnsureDpi();
@@ -106,8 +109,9 @@ private:
     bool i_groupMode;       // the rows are classes, not entries
     bool i_kindMode;        // the rows are kinds (effect / preset)
     bool i_recentMode;      // the rows are the most recently used entries
+    int i_emptyText;        // 0 = list has rows, else which "nothing here" line
 
-    const EffectNames* i_effectNames; // may be NULL
+    EffectNames* i_effectNames; // may be NULL
 
     pinyin::UsageTable i_usage; // "%APPDATA%\AEPinyinSearch\usage.tsv"
 

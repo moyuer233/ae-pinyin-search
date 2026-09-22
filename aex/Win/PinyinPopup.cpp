@@ -191,6 +191,7 @@ PinyinPopup::PinyinPopup(SPBasicSuite* spbP, AEGP_PluginID pluginID)
       i_groupMode(false),
       i_kindMode(false),
       i_recentMode(false),
+      i_emptyText(0),
       i_effectNames(NULL)
 {
 }
@@ -202,41 +203,58 @@ PinyinPopup::~PinyinPopup()
         DestroyWindow(i_hWnd);
         i_hWnd = NULL;
     }
+    ReleaseGdi();
+}
+
+// Everything Create() allocates, released in one place: the failure path has to
+// hand back the objects it already made before it gives up, or a retry (Show()
+// calls Create() again) overwrites the members and leaks them for good.
+void PinyinPopup::ReleaseGdi()
+{
     if (i_fontName)
     {
         DeleteObject(i_fontName);
+        i_fontName = NULL;
     }
     if (i_fontSmall)
     {
         DeleteObject(i_fontSmall);
+        i_fontSmall = NULL;
     }
     if (i_bgBrush)
     {
         DeleteObject(i_bgBrush);
+        i_bgBrush = NULL;
     }
     if (i_editBrush)
     {
         DeleteObject(i_editBrush);
+        i_editBrush = NULL;
     }
     if (i_selBrush)
     {
         DeleteObject(i_selBrush);
+        i_selBrush = NULL;
     }
     if (i_accentBrush)
     {
         DeleteObject(i_accentBrush);
+        i_accentBrush = NULL;
     }
     if (i_borderPen)
     {
         DeleteObject(i_borderPen);
+        i_borderPen = NULL;
     }
     if (i_badgePen)
     {
         DeleteObject(i_badgePen);
+        i_badgePen = NULL;
     }
     if (i_badgePenSel)
     {
         DeleteObject(i_badgePenSel);
+        i_badgePenSel = NULL;
     }
 }
 
@@ -288,15 +306,20 @@ std::wstring PinyinPopup::UsagePath() const
 void PinyinPopup::LoadUsage()
 {
     i_usage.Clear();
-    const std::string path = ToUtf8(UsagePath());
+    // Wide path straight into _wfopen_s: the narrow CRT reads a file name in the
+    // process ANSI code page, so a UTF-8 path (`C:\Users\<non-ascii>\...`) opened
+    // with fopen_s always fails - and silently, because CreateDirectoryW above
+    // succeeded.
+    const std::wstring path = UsagePath();
     if (path.empty())
     {
         return;
     }
     FILE* f = NULL;
-    if (fopen_s(&f, path.c_str(), "r") != 0 || !f)
+    if (_wfopen_s(&f, path.c_str(), L"r") != 0 || !f)
     {
-        return; // first run
+        AEPinyinLog("usage: no readable history file yet"); // first run
+        return;
     }
     char line[1024];
     while (std::fgets(line, sizeof(line), f))
@@ -326,20 +349,20 @@ void PinyinPopup::LoadUsage()
         i_usage.Add(name, count, lastUsed);
     }
     std::fclose(f);
-    AEPinyinLog("usage: loaded %d name(s) from %s", static_cast<int>(i_usage.Size()), path.c_str());
+    AEPinyinLog("usage: loaded %d name(s)", static_cast<int>(i_usage.Size()));
 }
 
 void PinyinPopup::SaveUsage()
 {
-    const std::string path = ToUtf8(UsagePath());
+    const std::wstring path = UsagePath();
     if (path.empty())
     {
         return;
     }
     FILE* f = NULL;
-    if (fopen_s(&f, path.c_str(), "w") != 0 || !f)
+    if (_wfopen_s(&f, path.c_str(), L"w") != 0 || !f)
     {
-        AEPinyinLog("usage: cannot write %s", path.c_str());
+        AEPinyinLog("usage: cannot write the history file");
         return;
     }
     for (size_t i = 0; i < i_usage.Size(); ++i)
@@ -402,6 +425,14 @@ void PinyinPopup::EnsureDpi()
         SendMessageW(i_editH, WM_SETFONT, reinterpret_cast<WPARAM>(i_fontName), TRUE);
         SendMessageW(i_editH, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(Scale(12), Scale(12)));
     }
+    if (i_listH)
+    {
+        // A fixed owner-draw list box takes its row height from WM_MEASUREITEM,
+        // which is only sent once at creation; after a DPI change (the popup
+        // landed on another monitor) the rows would keep the old scale while the
+        // fonts are re-made at the new one.
+        SendMessageW(i_listH, LB_SETITEMHEIGHT, 0, Scale(kRowH));
+    }
 }
 
 bool PinyinPopup::Create()
@@ -441,6 +472,11 @@ bool PinyinPopup::Create()
 
     TryRoundCorners(i_hWnd);
 
+    // DPI has to be known before the children exist: a fixed owner-draw list box
+    // measures its rows once, at creation, and that measurement is the only chance
+    // to get the row height right on a scaled display.
+    EnsureDpi();
+
     i_bgBrush = CreateSolidBrush(kBg);
     i_editBrush = CreateSolidBrush(kBg);
     i_selBrush = CreateSolidBrush(kSelBg);
@@ -457,18 +493,23 @@ bool PinyinPopup::Create()
         WS_CHILD | WS_VSCROLL | LBS_NOTIFY | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | LBS_NOINTEGRALHEIGHT,
         0, 0, 10, 10, i_hWnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kListID)), i_inst, NULL);
 
-    if (!i_editH || !i_listH || !i_bgBrush || !i_editBrush)
+    if (!i_editH || !i_listH || !i_bgBrush || !i_editBrush || !i_selBrush || !i_accentBrush ||
+        !i_borderPen || !i_badgePen || !i_badgePenSel)
     {
         AEPinyinLog(
             "popup: control/GDI creation failed edit=%p list=%p (err=%lu)", i_editH, i_listH,
             GetLastError());
         DestroyWindow(i_hWnd); // do not leave a half-built window behind: Create()
         i_hWnd = NULL;         // would short-circuit on it and hand Show() a wreck
+        i_editH = NULL;
+        i_listH = NULL;
+        i_prevEditProc = NULL;
+        i_prevListProc = NULL;
+        ReleaseGdi(); // hand back whatever did get made, or the retry leaks it
         return false;
     }
 
-    EnsureDpi();
-
+    SendMessageW(i_editH, WM_SETFONT, reinterpret_cast<WPARAM>(i_fontName), TRUE);
     SendMessageW(i_editH, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(kHint));
     SendMessageW(i_editH, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(Scale(12), Scale(12)));
 
@@ -476,6 +517,15 @@ bool PinyinPopup::Create()
         SetWindowLongPtrW(i_editH, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&PinyinPopup::S_EditProc)));
     i_prevListProc = reinterpret_cast<WNDPROC>(
         SetWindowLongPtrW(i_listH, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&PinyinPopup::S_ListProc)));
+    if (!i_prevEditProc || !i_prevListProc)
+    {
+        // Both subclass procs fall back to DefWindowProcW when the previous proc
+        // is unknown, and that means the edit box stops editing and the list stops
+        // responding - say so instead of looking broken for no reason.
+        AEPinyinLog(
+            "popup: SetWindowLongPtrW failed edit=%p list=%p (err=%lu)", i_prevEditProc,
+            i_prevListProc, GetLastError());
+    }
     SetWindowLongPtrW(i_editH, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
     SetWindowLongPtrW(i_listH, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
 
@@ -493,15 +543,32 @@ void PinyinPopup::Layout()
     GetClientRect(i_hWnd, &rc);
     const int w = rc.right - rc.left;
     const int h = rc.bottom - rc.top;
-    const int bar = Scale(kEditH) + 1; // 1px top border
+    const int editH = Scale(kEditH);
 
-    if (i_editH)
+    // Growing upwards puts the list ABOVE the box, so the box stays exactly where
+    // the popup was summoned and the results grow away from the cursor. With the
+    // box on top instead, it walked up the screen as rows came in.
+    if (i_growUp)
     {
-        MoveWindow(i_editH, 1, 1, w - 2, Scale(kEditH), TRUE);
+        if (i_listH)
+        {
+            MoveWindow(i_listH, 1, 1, w - 2, h - 2 - editH, TRUE);
+        }
+        if (i_editH)
+        {
+            MoveWindow(i_editH, 1, h - 1 - editH, w - 2, editH, TRUE);
+        }
     }
-    if (i_listH)
+    else
     {
-        MoveWindow(i_listH, 1, bar, w - 2, h - bar - 1, TRUE);
+        if (i_editH)
+        {
+            MoveWindow(i_editH, 1, 1, w - 2, editH, TRUE);
+        }
+        if (i_listH)
+        {
+            MoveWindow(i_listH, 1, editH + 1, w - 2, h - 2 - editH, TRUE);
+        }
     }
 }
 
@@ -558,6 +625,7 @@ void PinyinPopup::ResetSearch()
     i_groupMode = false;
     i_kindMode = false;
     i_recentMode = false;
+    i_emptyText = 0;
     ResizeToRows(0);
 }
 
@@ -574,6 +642,7 @@ void PinyinPopup::RunSearch()
     i_groupMode = parsed.listClasses;
     i_kindMode = parsed.listKinds;
     i_recentMode = false;
+    i_emptyText = 0;
 
     if (q.empty())
     {
@@ -604,11 +673,24 @@ void PinyinPopup::RunSearch()
 
     SendMessageW(i_listH, LB_RESETCONTENT, 0, 0);
 
-    if (i_groupMode)
+    // Both browsers store their rows in i_groups, so the "fill the list" step has
+    // to look at both flags. Testing i_groupMode alone left a bare "#" with an
+    // empty list box - and no hint either, because the window was sized for two
+    // rows that never got added.
+    const bool browsing = i_groupMode || i_kindMode;
+    size_t rows = browsing ? i_groups.size() : i_hits.size();
+
+    bool addFailed = false;
+    if (browsing)
     {
         for (const pinyin::GroupInfo& g : i_groups)
         {
-            SendMessageW(i_listH, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(Utf8ToWide(g.name.c_str()).c_str()));
+            if (SendMessageW(i_listH, LB_ADDSTRING, 0,
+                             reinterpret_cast<LPARAM>(Utf8ToWide(g.name.c_str()).c_str())) < 0)
+            {
+                addFailed = true;
+                break;
+            }
         }
     }
     else
@@ -616,17 +698,49 @@ void PinyinPopup::RunSearch()
         for (const pinyin::Hit& h : i_hits)
         {
             const PinyinEntry& e = kPinyinEntries[h.index];
-            SendMessageW(i_listH, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(Utf8ToWide(e.name).c_str()));
+            if (SendMessageW(i_listH, LB_ADDSTRING, 0,
+                             reinterpret_cast<LPARAM>(Utf8ToWide(e.name).c_str())) < 0)
+            {
+                addFailed = true;
+                break;
+            }
         }
     }
+    if (addFailed)
+    {
+        // A dropped string shifts every later item against the model the rows are
+        // drawn and applied from, so show nothing rather than the wrong thing.
+        AEPinyinLog("popup: LB_ADDSTRING failed, list cleared");
+        SendMessageW(i_listH, LB_RESETCONTENT, 0, 0);
+        i_hits.clear();
+        i_groups.clear();
+        rows = 0;
+    }
 
-    const size_t rows = (i_groupMode || i_kindMode) ? i_groups.size() : i_hits.size();
     if (rows == 0)
     {
         SendMessageW(i_listH, LB_SETCURSEL, static_cast<WPARAM>(-1), 0);
         ShowWindow(i_listH, SW_HIDE);
-        const std::wstring query = Query();
-        ResizeToRows(query.empty() ? 0 : 1); // one row holds the "no match" line
+        if (!q.empty())
+        {
+            // One row is reserved for the line that says why the list is empty.
+            // Which line that is gets decided here, so WM_PAINT does not have to
+            // parse the query a second time - that duplicate is exactly how "#"
+            // ended up with a blank window and no explanation.
+            if (parsed.listKinds || (!parsed.kindName.empty() && pinyin::KindOf(parsed.kindName) < 0))
+            {
+                i_emptyText = 3; // no such kind
+            }
+            else if (!parsed.group.empty())
+            {
+                i_emptyText = 2; // no such class
+            }
+            else
+            {
+                i_emptyText = 1; // nothing matched
+            }
+        }
+        ResizeToRows(i_emptyText ? 1 : 0);
     }
     else
     {
@@ -673,6 +787,14 @@ void PinyinPopup::Show()
         return;
     }
 
+    // The host's effect names are collected on first use rather than while the
+    // plug-in is still loading: a table built too early misses effects whose own
+    // plug-ins register later, and those rows then fall back to the index name and
+    // fail to apply.
+    if (i_effectNames)
+    {
+        i_effectNames->EnsureBuilt(i_spbP);
+    }
     LoadUsage();
     ResetSearch();
 
@@ -782,6 +904,10 @@ void PinyinPopup::ApplySelected()
         const std::wstring text = (i_kindMode ? L"#" : L"@") + Utf8ToWide(key.c_str());
         SetWindowTextW(i_editH, text.c_str());
         SendMessageW(i_editH, EM_SETSEL, text.size(), text.size());
+        // The click that picked this row left the keyboard focus on the list box,
+        // which handles no keys at all - hand it back or the next word cannot be
+        // typed at all.
+        SetFocus(i_editH);
         return;
     }
     if (sel < 0 || sel >= static_cast<int>(i_hits.size()))
@@ -932,8 +1058,9 @@ void PinyinPopup::ApplyEntry(int entryIndex)
         text += Utf8ToWide(e.name);
     }
     // Own the box by the window the popup took the foreground from, so it does
-    // not end up behind the host.
-    HWND owner = i_prevForeground;
+    // not end up behind the host - but that window may be gone by now, and a stale
+    // owner makes MessageBoxW fail without showing anything at all.
+    HWND owner = (i_prevForeground && IsWindow(i_prevForeground)) ? i_prevForeground : NULL;
     Hide();
     MessageBoxW(owner, text.c_str(), L"拼音搜索", MB_OK | MB_ICONWARNING);
 }
@@ -1089,24 +1216,23 @@ LRESULT PinyinPopup::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPar
         SelectObject(hdc, oldBrush);
         SelectObject(hdc, oldPen);
 
-        const bool empty = (i_groupMode || i_kindMode) ? i_groups.empty() : i_hits.empty();
-        if (empty && !Query().empty())
+        // RunSearch() has already worked out whether there is anything to show and
+        // why not; parsing the query again here is how the two views drifted apart.
+        if (i_emptyText != 0)
         {
-            RECT text = {rc.left + Scale(12), Scale(kEditH) + 1, rc.right - Scale(12), rc.bottom};
+            const int editH = Scale(kEditH);
+            RECT text = {rc.left + Scale(12), editH + 1, rc.right - Scale(12), rc.bottom};
+            if (i_growUp)
+            {
+                // Growing upwards puts the box at the bottom, so the line goes in
+                // the space above it.
+                text.top = rc.top + 1;
+                text.bottom = rc.bottom - 1 - editH;
+            }
             SelectObject(hdc, i_fontSmall);
             SetBkMode(hdc, TRANSPARENT);
             SetTextColor(hdc, kText3);
-            const pinyin::Query parsed = pinyin::ParseQuery(ToUtf8(Query()));
-            const bool badKind = !parsed.kindName.empty() && pinyin::KindOf(parsed.kindName) < 0;
-            const wchar_t* line = kNoHit;
-            if (parsed.listKinds || badKind)
-            {
-                line = kNoKind;
-            }
-            else if (!parsed.group.empty())
-            {
-                line = kNoGroup;
-            }
+            const wchar_t* line = (i_emptyText == 3) ? kNoKind : ((i_emptyText == 2) ? kNoGroup : kNoHit);
             DrawTextW(hdc, line, -1, &text, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
         }
 
@@ -1207,6 +1333,13 @@ LRESULT PinyinPopup::EditProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPa
     switch (message)
     {
     case WM_KEYDOWN:
+        // Shift/Ctrl + arrow is how text gets selected inside an edit box; list
+        // navigation must not swallow those gestures.
+        if ((GetKeyState(VK_SHIFT) < 0 || GetKeyState(VK_CONTROL) < 0) &&
+            (wParam == VK_DOWN || wParam == VK_UP || wParam == VK_NEXT || wParam == VK_PRIOR))
+        {
+            break;
+        }
         switch (wParam)
         {
         case VK_RETURN:
@@ -1291,10 +1424,37 @@ LRESULT PinyinPopup::ListProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPa
         {
             SendMessageW(hWnd, LB_SETCURSEL, LOWORD(pos), 0);
             ApplySelected();
+        }
+        if (i_shown)
+        {
+            // Pressing inside the list box gives it the focus, and it has no key
+            // handling of its own: without this, Esc / Enter / typing stop working
+            // after any click that did not also close the popup (the blank part of
+            // the list, a filter row, ...).
+            SetFocus(i_editH);
+        }
+        return 0;
+    }
+
+    case WM_KEYDOWN:
+        // The list box can be holding the focus for a moment (see above); keep the
+        // keys working from there as well.
+        switch (wParam)
+        {
+        case VK_ESCAPE:
+            Hide();
             return 0;
+        case VK_RETURN:
+            ApplySelected();
+            if (i_shown)
+            {
+                SetFocus(i_editH);
+            }
+            return 0;
+        default:
+            break;
         }
         break;
-    }
 
     default:
         break;
