@@ -1,0 +1,232 @@
+/*******************************************************************/
+/*                                                                 */
+/* AE Pinyin Search - what After Effects calls the installed        */
+/* effects                                                          */
+/*                                                                 */
+/* The search index carries the .aex file name for third-party      */
+/* effects ("AutoFill2"), but the host registers it under a display */
+/* name ("Auto Fill 2") and a match name, and addProperty() only    */
+/* accepts those. So ask the host once for every installed effect    */
+/* and translate at apply time.                                      */
+/*                                                                 */
+/*******************************************************************/
+
+#ifndef AEPINYINSEARCH_EFFECTNAMES_H
+#define AEPINYINSEARCH_EFFECTNAMES_H
+
+#include "AE_GeneralPlug.h"
+#include "DiagLog.h"
+
+#include <algorithm>
+#include <string>
+#include <vector>
+
+class EffectNames
+{
+public:
+    // Fold a name down to letters and digits: "AutoFill2" and "Auto Fill 2"
+    // both become "autofill2", which is how the index name finds the host name.
+    static std::string KeyOf(const char* name)
+    {
+        std::string out;
+        for (const unsigned char* p = reinterpret_cast<const unsigned char*>(name); p && *p; ++p)
+        {
+            const unsigned char c = *p;
+            if (c >= 'A' && c <= 'Z')
+            {
+                out += static_cast<char>(c - 'A' + 'a');
+            }
+            else if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))
+            {
+                out += static_cast<char>(c);
+            }
+        }
+        return out;
+    }
+
+    void Build(SPBasicSuite* spbP)
+    {
+        i_entries.clear();
+        i_byKey.clear();
+
+        AEGP_EffectSuite5* suite = NULL;
+        const void* suiteP = NULL;
+        if (!spbP ||
+            spbP->AcquireSuite(kAEGPEffectSuite, kAEGPEffectSuiteVersion5, &suiteP) != A_Err_NONE || !suiteP)
+        {
+            AEPinyinLog("effect names: AEGP Effect Suite 5 unavailable");
+            return;
+        }
+        suite = reinterpret_cast<AEGP_EffectSuite5*>(const_cast<void*>(suiteP));
+
+        A_long count = 0;
+        if (suite->AEGP_GetNumInstalledEffects(&count) == A_Err_NONE)
+        {
+            AEGP_InstalledEffectKey key = AEGP_InstalledEffectKey_NONE;
+            for (A_long i = 0; i < count; ++i)
+            {
+                AEGP_InstalledEffectKey next = AEGP_InstalledEffectKey_NONE;
+                if (suite->AEGP_GetNextInstalledEffect(key, &next) != A_Err_NONE ||
+                    next == AEGP_InstalledEffectKey_NONE)
+                {
+                    break;
+                }
+                key = next;
+
+                A_char display[AEGP_MAX_EFFECT_NAME_SIZE] = {};
+                A_char match[AEGP_MAX_EFFECT_MATCH_NAME_SIZE] = {};
+                suite->AEGP_GetEffectName(key, display);
+                suite->AEGP_GetEffectMatchName(key, match);
+                if (display[0] == '\0' && match[0] == '\0')
+                {
+                    continue;
+                }
+
+                // Skip the entries whose "name" is actually the file name AE
+                // hands out for hidden/internal effects? No: keep everything,
+                // the folded key decides whether it is useful.
+                Entry e;
+                e.display = display;
+                e.matchName = match;
+                i_entries.push_back(e);
+            }
+        }
+        spbP->ReleaseSuite(kAEGPEffectSuite, kAEGPEffectSuiteVersion5);
+
+        for (size_t i = 0; i < i_entries.size(); ++i)
+        {
+            const std::string displayKey = KeyOf(i_entries[i].display.c_str());
+            const std::string matchKey = KeyOf(i_entries[i].matchName.c_str());
+            if (!displayKey.empty())
+            {
+                i_byKey.push_back(std::make_pair(displayKey, i));
+            }
+            if (!matchKey.empty() && matchKey != displayKey)
+            {
+                i_byKey.push_back(std::make_pair(matchKey, i));
+            }
+        }
+        std::sort(i_byKey.begin(), i_byKey.end());
+        AEPinyinLog("effect names: %d installed effect(s) from the host", static_cast<int>(i_entries.size()));
+    }
+
+    size_t Size() const { return i_entries.size(); }
+
+    // The name to show for an index row: what the host calls the effect, or an
+    // empty string when the index name is not one the host knows.
+    std::string DisplayNameFor(const char* indexName, const char* indexEnglish) const
+    {
+        const Entry* e = Find(indexName, indexEnglish);
+        return e ? e->display : std::string();
+    }
+
+    // The names to hand to addProperty(), most reliable first: the match name is
+    // locale independent, then the display name, then whatever the index had.
+    void ApplyNamesFor(const char* indexName, const char* indexEnglish, std::vector<std::string>& out) const
+    {
+        out.clear();
+        const Entry* e = Find(indexName, indexEnglish);
+        if (e)
+        {
+            Push(out, e->matchName);
+            Push(out, e->display);
+        }
+        Push(out, indexName);
+        Push(out, indexEnglish);
+    }
+
+private:
+    struct Entry
+    {
+        std::string display;
+        std::string matchName;
+    };
+
+    static void Push(std::vector<std::string>& out, const std::string& value)
+    {
+        if (value.empty())
+        {
+            return;
+        }
+        for (const std::string& seen : out)
+        {
+            if (seen == value)
+            {
+                return;
+            }
+        }
+        out.push_back(value);
+    }
+
+    const Entry* Find(const char* indexName, const char* indexEnglish) const
+    {
+        const Entry* byName = FindByKey(KeyOf(indexName));
+        if (byName)
+        {
+            return byName;
+        }
+        const Entry* byEnglish = FindByKey(KeyOf(indexEnglish));
+        if (byEnglish)
+        {
+            return byEnglish;
+        }
+        // Folding fixes "AutoFill2" vs "Auto Fill 2", but vendors also add
+        // prefixes: the file is "Ambient Light.aex" while the host calls it
+        // "BCC+Ambient Light". Fall back to the host name that contains the
+        // index name with the fewest extra characters.
+        const Entry* byName2 = FindContaining(KeyOf(indexName));
+        if (byName2)
+        {
+            return byName2;
+        }
+        return FindContaining(KeyOf(indexEnglish));
+    }
+
+    // The closest host name that contains `key`. Very short keys are ignored so
+    // that "Glow" does not latch onto "DeepGlow".
+    const Entry* FindContaining(const std::string& key) const
+    {
+        if (key.size() < 5)
+        {
+            return NULL;
+        }
+        const Entry* best = NULL;
+        size_t bestSlack = 0;
+        for (size_t i = 0; i < i_byKey.size(); ++i)
+        {
+            const std::string& hostKey = i_byKey[i].first;
+            if (hostKey.size() < key.size() || hostKey.find(key) == std::string::npos)
+            {
+                continue;
+            }
+            const size_t slack = hostKey.size() - key.size();
+            if (!best || slack < bestSlack)
+            {
+                best = &i_entries[i_byKey[i].second];
+                bestSlack = slack;
+            }
+        }
+        return best;
+    }
+
+    const Entry* FindByKey(const std::string& key) const
+    {
+        if (key.empty())
+        {
+            return NULL;
+        }
+        const std::pair<std::string, size_t> probe(key, 0);
+        std::vector<std::pair<std::string, size_t>>::const_iterator at =
+            std::lower_bound(i_byKey.begin(), i_byKey.end(), probe);
+        if (at != i_byKey.end() && at->first == key)
+        {
+            return &i_entries[at->second];
+        }
+        return NULL;
+    }
+
+    std::vector<Entry> i_entries;
+    std::vector<std::pair<std::string, size_t>> i_byKey; // sorted, folded name -> entry
+};
+
+#endif // AEPINYINSEARCH_EFFECTNAMES_H

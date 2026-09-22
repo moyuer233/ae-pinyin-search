@@ -23,6 +23,7 @@ $files = @(
     'Win\AEPinyinSearch.vcxproj',
     'Win\AEPinyinSearch_PiPL.rc',
     'Win\DiagLog.h',
+    'Win\EffectNames.h',
     'Win\PinyinPopup.cpp',
     'Win\PinyinPopup.h'
 )

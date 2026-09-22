@@ -335,6 +335,7 @@
     <ClInclude Include="..\..\..\Util\String_Utils.h" />
     <ClInclude Include="PinyinPopup.h" />
     <ClInclude Include="DiagLog.h" />
+    <ClInclude Include="EffectNames.h" />
   </ItemGroup>
   <ItemGroup>
     <CustomBuild Include="..\AEPinyinSearch_PiPL.r">

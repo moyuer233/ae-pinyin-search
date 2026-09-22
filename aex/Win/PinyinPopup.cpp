@@ -8,6 +8,7 @@
 
 #include "AEGP_SuiteHandler.h"
 #include "DiagLog.h"
+#include "EffectNames.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -189,7 +190,8 @@ PinyinPopup::PinyinPopup(SPBasicSuite* spbP, AEGP_PluginID pluginID)
       i_suppressChange(false),
       i_groupMode(false),
       i_kindMode(false),
-      i_recentMode(false)
+      i_recentMode(false),
+      i_effectNames(NULL)
 {
 }
 
@@ -831,13 +833,25 @@ void PinyinPopup::ApplyEntry(int entryIndex)
     }
     else
     {
-        jsx += "var names=['";
-        jsx += EscapeJs(e.name ? e.name : "");
-        jsx += "'";
-        if (e.english && *e.english && std::strcmp(e.english, e.name) != 0)
+        // The index name for a third-party effect is the .aex file name, which
+        // addProperty() does not know ("AutoFill2" vs "Auto Fill 2"). Ask the
+        // host for the names it actually registered and try those first.
+        std::vector<std::string> names;
+        if (i_effectNames)
         {
-            jsx += ",'";
-            jsx += EscapeJs(e.english);
+            i_effectNames->ApplyNamesFor(e.name, e.english, names);
+        }
+        else
+        {
+            names.push_back(e.name ? e.name : "");
+            names.push_back(e.english ? e.english : "");
+        }
+
+        jsx += "var names=[";
+        for (size_t i = 0; i < names.size(); ++i)
+        {
+            jsx += (i == 0) ? "'" : ",'";
+            jsx += EscapeJs(names[i].c_str());
             jsx += "'";
         }
         jsx += "];var n=0;";
@@ -952,12 +966,21 @@ void PinyinPopup::DrawRow(const DRAWITEMSTRUCT& dis)
             return;
         }
         const PinyinEntry& e = kPinyinEntries[i_hits[dis.itemID].index];
-        name = Utf8ToWide(e.name);
+        // Show what the host calls it when that differs from the index name
+        // (the index only has the .aex file name for third-party effects), and
+        // keep the index name visible underneath.
+        const std::string hostName =
+            (i_effectNames && !e.is_preset) ? i_effectNames->DisplayNameFor(e.name, e.english) : std::string();
+        name = Utf8ToWide(hostName.empty() ? e.name : hostName.c_str());
         if (i_recentMode)
         {
             // Hit::score carries the use count in this mode, which also explains
             // why these rows are on screen before anything was typed.
             secondary = L"用过 " + std::to_wstring(i_hits[dis.itemID].score) + L" 次";
+        }
+        else if (!hostName.empty() && e.name && hostName != e.name)
+        {
+            secondary = Utf8ToWide(e.name);
         }
         else
         {

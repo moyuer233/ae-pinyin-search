@@ -22,11 +22,16 @@
 
 #include "../pinyin_match.h"
 
+class EffectNames; // the host's own effect names (Win\EffectNames.h)
+
 class PinyinPopup
 {
 public:
     PinyinPopup(SPBasicSuite* spbP, AEGP_PluginID pluginID);
     ~PinyinPopup();
+
+    // Optional: makes the rows show, and the apply use, the host's names.
+    void SetEffectNames(const EffectNames* names) { i_effectNames = names; }
 
     // Show it if hidden, hide it if shown.
     void Toggle();
@@ -101,6 +106,8 @@ private:
     bool i_groupMode;       // the rows are classes, not entries
     bool i_kindMode;        // the rows are kinds (effect / preset)
     bool i_recentMode;      // the rows are the most recently used entries
+
+    const EffectNames* i_effectNames; // may be NULL
 
     pinyin::UsageTable i_usage; // "%APPDATA%\AEPinyinSearch\usage.tsv"
 

@@ -12,6 +12,7 @@
 #include <new>
 #include "AEPinyinSearch.h"
 #include "DiagLog.h"
+#include "EffectNames.h"
 
 // The global mouse hook and the hotkey live on a thread this plug-in owns.
 //
@@ -31,6 +32,7 @@ public:
     AEGP_SuiteHandler i_sp;
     AEGP_Command i_command;
     PinyinPopup* i_popup;
+    EffectNames i_effectNames; // what the host calls the installed effects
 
     HWND i_pumpWnd;      // AE main thread: receives the marshalled toggle
     HANDLE i_inputThread; // our thread: owns the hook + the hotkey
@@ -330,6 +332,11 @@ public:
         PT_ETX(i_sp.RegisterSuite5()->AEGP_RegisterDeathHook(i_pluginID, &AEPinyinSearch::S_DeathHook, (AEGP_DeathRefcon)(this)));
 
         i_popup = new PinyinPopup(pica_basicP, pluginID);
+        // Ask the host for the names it registered: the index only carries the
+        // .aex file names for third-party effects, and addProperty() needs the
+        // host's own name or match name.
+        i_effectNames.Build(pica_basicP);
+        i_popup->SetEffectNames(&i_effectNames);
 
         s_instance = this;
         if (CreatePumpWindow())
@@ -337,8 +344,8 @@ public:
             StartInputThread();
         }
 
-        AEPinyinLog("plugin: loaded (popup=%p, pump=%p, input thread=%lu)", (void*)i_popup, (void*)i_pumpWnd,
-                    i_inputThreadId);
+        AEPinyinLog("plugin: loaded (popup=%p, pump=%p, input thread=%lu, effect names=%d)", (void*)i_popup,
+                    (void*)i_pumpWnd, i_inputThreadId, static_cast<int>(i_effectNames.Size()));
     }
 
     void CommandHook(
