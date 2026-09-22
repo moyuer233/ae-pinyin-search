@@ -24,6 +24,7 @@ $files = @(
     'Win\AEPinyinSearch_PiPL.rc',
     'Win\DiagLog.h',
     'Win\EffectNames.h',
+    'Win\EffectNameMatch.h',
     'Win\PinyinPopup.cpp',
     'Win\PinyinPopup.h'
 )

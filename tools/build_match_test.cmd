@@ -21,7 +21,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-cl /nologo /utf-8 /EHsc /W3 /I"%PROJ%" /Fo"%OUT%\\" /Fe"%OUT%\match_test.exe" "%SRC%" "%PROJ%\pinyin_data.cpp"
+cl /nologo /utf-8 /EHsc /W3 /I"%PROJ%" /I"%PROJ%\Win" /Fo"%OUT%\\" /Fe"%OUT%\match_test.exe" "%SRC%" "%PROJ%\pinyin_data.cpp"
 if errorlevel 1 (
   echo [FAIL] compile failed
   exit /b 1

@@ -5,6 +5,7 @@
 // Build + run: tools\build_match_test.cmd   (exit code = number of failures)
 
 #include "pinyin_match.h"
+#include "EffectNameMatch.h"
 
 #include <cstdio>
 #include <cstring>
@@ -76,8 +77,69 @@ static bool AllInClass(const std::vector<pinyin::Hit>& hits, const char* token)
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// The host-name translation, exercised with made-up host data so the whole
+// family of "the index name is not the host's name" cases stays covered:
+//   * a file name with the words run together   AutoFill2     vs Auto Fill 2
+//   * a vendor prefix                            Ambient Light vs BCC+Ambient Light
+//   * a chinese display name -> its match name   梯度渐变       vs Gradient Ramp
+//   * a dictionary key split into words          PProRamp      vs P Pro Ramp
+//   * another vendor's same-suffix effect, which must NOT be picked
+// ---------------------------------------------------------------------------
+static void TestEffectNames()
+{
+    EffectNameMatch host;
+    host.AddEntry("Auto Fill 2", "AutoFill2");
+    host.AddEntry("BCC+Ambient Light", "BCCAmbientLight");
+    host.AddEntry("\xe6\xa2\xaf\xe5\xba\xa6\xe6\xb8\x90\xe5\x8f\x98", "ADBE Ramp"); // 梯度渐变
+    host.AddEntry("PProRamp", "PProRamp");
+    host.AddEntry("uni.Gradient Ramp", "UniGradientRamp"); // the impostor
+    host.Index();
+
+    std::vector<std::string> names;
+
+    // Third-party rows (a .aex file name) may involve a vendor prefix.
+    host.ApplyNamesFor("AutoFill2", "AutoFill2", true, names);
+    Check(!names.empty() && names[0] == "AutoFill2", "a run-together file name resolves to the host match name");
+
+    host.ApplyNamesFor("Ambient Light", "Ambient Light", true, names);
+    Check(!names.empty() && names[0] == "BCCAmbientLight", "a vendor prefix is found");
+
+    // Built-in rows carry the host's own name: no guessing.
+    host.ApplyNamesFor("Gradient Ramp", "Gradient Ramp", false, names);
+    Check(!names.empty() && names[0] != "UniGradientRamp", "another vendor's same-suffix effect is NOT picked");
+    Check(names[0] == "Gradient Ramp", "a built-in falls back to its own name");
+
+    host.ApplyNamesFor("\xe6\xa2\xaf\xe5\xba\xa6\xe6\xb8\x90\xe5\x8f\x98", "Gradient Ramp", false, names);
+    Check(!names.empty() && names[0] == "ADBE Ramp", "an exact chinese name resolves to its match name");
+    Check(host.DisplayNameFor("\xe6\xa2\xaf\xe5\xba\xa6\xe6\xb8\x90\xe5\x8f\x98", "Gradient Ramp").empty(),
+          "a chinese index name is not renamed");
+
+    host.ApplyNamesFor("\xe6\xb8\x90\xe5\x8f\x98", "P Pro Ramp", false, names);
+    {
+        bool hasUnsplit = false;
+        for (const std::string& n : names)
+        {
+            if (n == "PProRamp")
+            {
+                hasUnsplit = true;
+            }
+        }
+        Check(hasUnsplit, "the host's unsplit spelling reaches the candidate list");
+    }
+
+    host.ApplyNamesFor("Foo Bar", "Foo Bar", true, names);
+    Check(!names.empty() && names.back() == "FooBar", "an unresolved name still offers its de-spaced spelling");
+
+    host.ApplyNamesFor("No Such Effect", "No Such Effect", true, names);
+    Check(!names.empty() && names[0] == "No Such Effect", "an unknown name falls back to the index name");
+    Check(!names.empty() && names.back() == "NoSuchEffect", "and its de-spaced spelling is still offered");
+}
+
 int main()
 {
+    TestEffectNames();
+
     std::printf("entries in table: %d\n\n", kPinyinEntryCount);
 
     // VendorKey / StartsWith are the basis of the @ filter.

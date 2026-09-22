@@ -839,7 +839,10 @@ void PinyinPopup::ApplyEntry(int entryIndex)
         std::vector<std::string> names;
         if (i_effectNames)
         {
-            i_effectNames->ApplyNamesFor(e.name, e.english, names);
+            // The index name of a third-party effect is a .aex file name, which
+            // is also the only case where a vendor prefix can be involved.
+            const bool thirdParty = (e.vendor && *e.vendor) ? true : false;
+            i_effectNames->ApplyNamesFor(e.name, e.english, thirdParty, names);
         }
         else
         {
