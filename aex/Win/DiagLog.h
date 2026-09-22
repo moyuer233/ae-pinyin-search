@@ -21,6 +21,10 @@
 
 // Messages must stay ASCII: the file is opened in text mode and is read by
 // humans and by scripts that do not know the machine's code page.
+//
+// Not for low-level hook callbacks: the system waits for those and unhooks a
+// callback that takes too long, so they only post a message and let the thread
+// that owns the window write the line.
 inline void AEPinyinLog(const char* fmt, ...)
 {
     char dir[MAX_PATH] = {};
@@ -29,6 +33,15 @@ inline void AEPinyinLog(const char* fmt, ...)
         return;
     }
     const std::string path = std::string(dir) + "AEPinyinSearch.log";
+
+    // Lines are appended for the lifetime of every session, so start over once the
+    // file gets big instead of letting it grow without bound.
+    WIN32_FILE_ATTRIBUTE_DATA attr = {};
+    if (GetFileAttributesExA(path.c_str(), GetFileExInfoStandard, &attr) &&
+        (attr.nFileSizeHigh > 0 || attr.nFileSizeLow > (1024u * 1024u)))
+    {
+        DeleteFileA(path.c_str());
+    }
 
     FILE* f = NULL;
     if (fopen_s(&f, path.c_str(), "a") != 0 || !f)

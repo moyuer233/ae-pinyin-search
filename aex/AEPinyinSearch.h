@@ -21,8 +21,6 @@
 #include "AEGP_SuiteHandler.h"
 #ifndef DEBUG
     #define DEBUG
-#else
-    #error
 #endif
 #include "SuiteHelper.h"
 #include "SimpleSuiteHelper.h"

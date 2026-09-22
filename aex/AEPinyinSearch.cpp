@@ -14,6 +14,11 @@
 #include "DiagLog.h"
 #include "EffectNames.h"
 
+// Bumped with every released build: the plug-in has no version field the host
+// shows, so this string (written to the log at load) is how a deployed .aex
+// identifies itself.
+static const char* const kVersion = "0.6.0";
+
 // The global mouse hook and the hotkey live on a thread this plug-in owns.
 //
 // A low-level hook callback is delivered on the thread that installed the hook,
@@ -39,9 +44,12 @@ public:
     DWORD i_inputThreadId;
     bool i_hotkeyWithShift;
     bool i_hotkeyRegistered;
+    volatile LONG i_togglePending; // 1 while a toggle is waiting for the host thread
 
     static AEPinyinSearch* s_instance;
     static const UINT kMsgToggle = WM_APP + 1;
+    static const int kSourceHotkey = 1;
+    static const int kSourceMouse = 2;
 
     /// STATIC BINDERS
     static LRESULT CALLBACK S_PumpWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
@@ -53,10 +61,13 @@ public:
         }
         if (message == kMsgToggle)
         {
-            // wParam carries the tick count from when the request was posted, so
-            // "AE main thread was busy for X ms" shows up in the log.
-            const DWORD posted = static_cast<DWORD>(wParam);
+            // wParam carries the source (hotkey / mouse side button) and lParam the
+            // tick count from when the request was posted, so "AE main thread was
+            // busy for X ms" shows up in the log.
+            InterlockedExchange(&self->i_togglePending, 0);
+            const DWORD posted = static_cast<DWORD>(lParam);
             const DWORD waited = GetTickCount() - posted;
+            AEPinyinLog("toggle: %s", (static_cast<int>(wParam) == kSourceMouse) ? "mouse x-button" : "hotkey");
             if (waited > 200)
             {
                 AEPinyinLog("toggle: AE main thread took %lu ms to get to it", waited);
@@ -76,8 +87,7 @@ public:
             // search bar belongs to AE, so ignore those.
             if (AEPinyinSearch::IsAEForeground())
             {
-                AEPinyinLog("toggle: hotkey");
-                self->ToggleFromAnyThread();
+                self->ToggleFromAnyThread(kSourceHotkey);
             }
             return 0;
         }
@@ -99,8 +109,10 @@ public:
             const int which = static_cast<int>((ms->mouseData >> 16) & 0xFFFF);
             if (which == XBUTTON1 || which == XBUTTON2)
             {
-                AEPinyinLog("toggle: mouse x-button");
-                s_instance->ToggleFromAnyThread();
+                // Nothing but a PostMessage here: the system waits for a low-level
+                // hook callback (and unhooks it on a timeout), so no logging and no
+                // file I/O is allowed on this path. The pump thread writes the line.
+                s_instance->ToggleFromAnyThread(kSourceMouse);
                 return 1; // do not let the host see the press
             }
         }
@@ -128,12 +140,23 @@ public:
     }
 
     // Safe from any thread: the window belongs to AE's main thread.
-    void ToggleFromAnyThread()
+    //
+    // Requests are coalesced: while one toggle is still waiting for the host's main
+    // thread, further presses are dropped rather than queued. Queued toggles used
+    // to be replayed one after another once AE got around to them, which flickered
+    // the popup open and shut and repeated the whole search every time.
+    void ToggleFromAnyThread(int source)
     {
-        if (i_pumpWnd)
+        if (!i_pumpWnd)
         {
-            PostMessageA(i_pumpWnd, kMsgToggle, static_cast<WPARAM>(GetTickCount()), 0);
+            return;
         }
+        if (InterlockedCompareExchange(&i_togglePending, 1, 0) != 0)
+        {
+            return;
+        }
+        PostMessageA(
+            i_pumpWnd, kMsgToggle, static_cast<WPARAM>(source), static_cast<LPARAM>(GetTickCount()));
     }
 
     // Must run on AE's main thread (it owns i_popup).
@@ -320,7 +343,8 @@ public:
           i_inputThread(NULL),
           i_inputThreadId(0),
           i_hotkeyWithShift(false),
-          i_hotkeyRegistered(false)
+          i_hotkeyRegistered(false),
+          i_togglePending(0)
     {
         PT_ETX(i_sp.CommandSuite1()->AEGP_GetUniqueCommand(&i_command));
         PT_ETX(i_sp.CommandSuite1()->AEGP_InsertMenuCommand(
@@ -332,10 +356,11 @@ public:
         PT_ETX(i_sp.RegisterSuite5()->AEGP_RegisterDeathHook(i_pluginID, &AEPinyinSearch::S_DeathHook, (AEGP_DeathRefcon)(this)));
 
         i_popup = new PinyinPopup(pica_basicP, pluginID);
-        // Ask the host for the names it registered: the index only carries the
-        // .aex file names for third-party effects, and addProperty() needs the
-        // host's own name or match name.
-        i_effectNames.Build(pica_basicP);
+        // The host's own effect names are collected on the popup's first Show()
+        // (EffectNames::EnsureBuilt). The index only carries the .aex file names
+        // for third-party effects and addProperty() needs the host's own name or
+        // match name - but the table cannot be built here, other plug-ins register
+        // their effects after this one has loaded.
         i_popup->SetEffectNames(&i_effectNames);
 
         s_instance = this;
@@ -344,8 +369,9 @@ public:
             StartInputThread();
         }
 
-        AEPinyinLog("plugin: loaded (popup=%p, pump=%p, input thread=%lu, effect names=%d)", (void*)i_popup,
-                    (void*)i_pumpWnd, i_inputThreadId, static_cast<int>(i_effectNames.Size()));
+        AEPinyinLog(
+            "plugin: loaded v%s (popup=%p, pump=%p, input thread=%lu)", kVersion, (void*)i_popup,
+            (void*)i_pumpWnd, i_inputThreadId);
     }
 
     void CommandHook(

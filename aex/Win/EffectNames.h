@@ -19,6 +19,19 @@
 class EffectNames : public EffectNameMatch
 {
 public:
+    EffectNames() : i_built(false) {}
+
+    // Built on first use - the popup's first Show() - rather than while the
+    // plug-in is still loading, because other plug-ins may register their effects
+    // after this one and a table collected too early would be missing them.
+    void EnsureBuilt(SPBasicSuite* spbP)
+    {
+        if (!i_built)
+        {
+            Build(spbP);
+        }
+    }
+
     void Build(SPBasicSuite* spbP)
     {
         AEGP_EffectSuite5* suite = NULL;
@@ -55,8 +68,12 @@ public:
         spbP->ReleaseSuite(kAEGPEffectSuite, kAEGPEffectSuiteVersion5);
 
         Index();
+        i_built = true;
         AEPinyinLog("effect names: %d installed effect(s) from the host", static_cast<int>(Size()));
     }
+
+private:
+    bool i_built;
 };
 
 #endif // AEPINYINSEARCH_EFFECTNAMES_H
