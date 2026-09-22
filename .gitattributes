@@ -1,0 +1,4 @@
+# Sources are LF everywhere: the SDK tree the compiler reads and the mirror in
+# this repo have to stay byte-identical, and a checkout that rewrites them to CRLF
+# would show up as a difference on every mirror run.
+* text=auto eol=lf
