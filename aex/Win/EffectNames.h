@@ -48,6 +48,7 @@ public:
     {
         i_entries.clear();
         i_byKey.clear();
+        i_byExact.clear();
 
         AEGP_EffectSuite5* suite = NULL;
         const void* suiteP = NULL;
@@ -105,17 +106,31 @@ public:
             {
                 i_byKey.push_back(std::make_pair(matchKey, i));
             }
+            if (!i_entries[i].display.empty())
+            {
+                i_byExact.push_back(std::make_pair(i_entries[i].display, i));
+            }
         }
         std::sort(i_byKey.begin(), i_byKey.end());
+        std::sort(i_byExact.begin(), i_byExact.end());
         AEPinyinLog("effect names: %d installed effect(s) from the host", static_cast<int>(i_entries.size()));
     }
 
     size_t Size() const { return i_entries.size(); }
 
+    // Only a name with ASCII in it can be looked up by folding. The chinese
+    // names of the built-in effects fold to nothing, and those names are exactly
+    // what the host's own UI shows, so they must be left alone.
+    static bool CanLookUp(const char* indexName) { return !KeyOf(indexName).empty(); }
+
     // The name to show for an index row: what the host calls the effect, or an
-    // empty string when the index name is not one the host knows.
+    // empty string when there is nothing better than the index name.
     std::string DisplayNameFor(const char* indexName, const char* indexEnglish) const
     {
+        if (!CanLookUp(indexName))
+        {
+            return std::string();
+        }
         const Entry* e = Find(indexName, indexEnglish);
         return e ? e->display : std::string();
     }
@@ -125,14 +140,22 @@ public:
     void ApplyNamesFor(const char* indexName, const char* indexEnglish, std::vector<std::string>& out) const
     {
         out.clear();
-        const Entry* e = Find(indexName, indexEnglish);
-        if (e)
+        if (CanLookUp(indexName))
         {
-            Push(out, e->matchName);
-            Push(out, e->display);
+            const Entry* e = Find(indexName, indexEnglish);
+            if (e)
+            {
+                Push(out, e->matchName);
+                Push(out, e->display);
+            }
         }
         Push(out, indexName);
         Push(out, indexEnglish);
+        // The index splits camel-case keys into words ("PProRamp" -> "P Pro
+        // Ramp"), and the host may well know the unsplit spelling, so try that
+        // too before giving up.
+        Push(out, WithoutSpaces(indexName));
+        Push(out, WithoutSpaces(indexEnglish));
     }
 
 private:
@@ -158,12 +181,38 @@ private:
         out.push_back(value);
     }
 
+    static std::string WithoutSpaces(const char* name)
+    {
+        std::string out;
+        for (const char* p = name; p && *p; ++p)
+        {
+            if (*p != ' ' && *p != '\t')
+            {
+                out += *p;
+            }
+        }
+        return (out == (name ? name : "")) ? std::string() : out;
+    }
+
     const Entry* Find(const char* indexName, const char* indexEnglish) const
     {
+        // A chinese index name folds to nothing, but it can still be exactly the
+        // host's display name - that is how the built-ins resolve to their match
+        // names, which addProperty() takes regardless of the UI language.
+        const Entry* exact = FindExact(indexName);
+        if (exact)
+        {
+            return exact;
+        }
         const Entry* byName = FindByKey(KeyOf(indexName));
         if (byName)
         {
             return byName;
+        }
+        const Entry* exactEnglish = FindExact(indexEnglish);
+        if (exactEnglish)
+        {
+            return exactEnglish;
         }
         const Entry* byEnglish = FindByKey(KeyOf(indexEnglish));
         if (byEnglish)
@@ -172,19 +221,21 @@ private:
         }
         // Folding fixes "AutoFill2" vs "Auto Fill 2", but vendors also add
         // prefixes: the file is "Ambient Light.aex" while the host calls it
-        // "BCC+Ambient Light". Fall back to the host name that contains the
-        // index name with the fewest extra characters.
-        const Entry* byName2 = FindContaining(KeyOf(indexName));
+        // "BCC+Ambient Light". Accept a host name that ENDS with the index name
+        // plus such a prefix, and pick the least padded one.
+        const Entry* byName2 = FindPrefixed(KeyOf(indexName));
         if (byName2)
         {
             return byName2;
         }
-        return FindContaining(KeyOf(indexEnglish));
+        return FindPrefixed(KeyOf(indexEnglish));
     }
 
-    // The closest host name that contains `key`. Very short keys are ignored so
-    // that "Glow" does not latch onto "DeepGlow".
-    const Entry* FindContaining(const std::string& key) const
+    // The host name "<vendor prefix><key>". A plain substring test was too eager:
+    // it resolved the built-in "Gradient Ramp" onto another vendor's
+    // "uni.Gradient Ramp". Short keys are ignored so "Glow" cannot claim
+    // "DeepGlow".
+    const Entry* FindPrefixed(const std::string& key) const
     {
         if (key.size() < 5)
         {
@@ -195,7 +246,7 @@ private:
         for (size_t i = 0; i < i_byKey.size(); ++i)
         {
             const std::string& hostKey = i_byKey[i].first;
-            if (hostKey.size() < key.size() || hostKey.find(key) == std::string::npos)
+            if (hostKey.size() <= key.size() || hostKey.compare(hostKey.size() - key.size(), key.size(), key) != 0)
             {
                 continue;
             }
@@ -209,9 +260,24 @@ private:
         return best;
     }
 
-    const Entry* FindByKey(const std::string& key) const
+    const Entry* FindExact(const char* name) const
     {
-        if (key.empty())
+        if (!name || !*name)
+        {
+            return NULL;
+        }
+        const std::pair<std::string, size_t> probe(name, 0);
+        std::vector<std::pair<std::string, size_t>>::const_iterator at =
+            std::lower_bound(i_byExact.begin(), i_byExact.end(), probe);
+        if (at != i_byExact.end() && at->first == name)
+        {
+            return &i_entries[at->second];
+        }
+        return NULL;
+    }
+
+    const Entry* FindByKey(const std::string& key) const
+    {        if (key.empty())
         {
             return NULL;
         }
@@ -226,7 +292,8 @@ private:
     }
 
     std::vector<Entry> i_entries;
-    std::vector<std::pair<std::string, size_t>> i_byKey; // sorted, folded name -> entry
+    std::vector<std::pair<std::string, size_t>> i_byKey;   // sorted, folded name -> entry
+    std::vector<std::pair<std::string, size_t>> i_byExact; // sorted, exact display name -> entry
 };
 
 #endif // AEPINYINSEARCH_EFFECTNAMES_H
