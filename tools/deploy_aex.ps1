@@ -9,6 +9,13 @@
 # The old .aex stays locked while AfterFX runs, so this waits for it to exit.
 # Run elevated:
 #   Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','<this file>'
+#
+# Order matters: everything is validated and copied first, and the copy left in
+# MediaCore is only removed once the new one is in place - otherwise a failed
+# copy leaves no plug-in installed at all.
+#
+# Paths come from the environment when set (AE_INSTALL_DIR, AE_MEDIACORE,
+# AE_PLUGIN_BUILD_DIR), otherwise from this machine's layout. ASCII only.
 
 param(
     [int]$WaitSeconds = 900
@@ -16,16 +23,25 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$src = 'H:\ae-sdk\build\AEGP\AEPinyinSearch.aex'
-$dstDir = 'H:\adobe\Adobe After Effects 2026\Support Files\Plug-ins\Extensions'
+$repo = Split-Path -Parent $PSScriptRoot
+$ae = if ($env:AE_INSTALL_DIR) { $env:AE_INSTALL_DIR } else { 'H:\adobe\Adobe After Effects 2026' }
+$buildDir = if ($env:AE_PLUGIN_BUILD_DIR) { $env:AE_PLUGIN_BUILD_DIR } else { 'H:\ae-sdk\build' }
+$mediaCore = if ($env:AE_MEDIACORE) { $env:AE_MEDIACORE } else { 'C:\Program Files\Adobe\Common\Plug-ins\7.0\MediaCore' }
+
+$src = Join-Path $buildDir 'AEGP\AEPinyinSearch.aex'
+$dstDir = Join-Path $ae 'Support Files\Plug-ins\Extensions'
 $dst = Join-Path $dstDir 'AEPinyinSearch.aex'
-$old = 'C:\Program Files\Adobe\Common\Plug-ins\7.0\MediaCore\AEPinyinSearch.aex'
-$log = 'H:\ae-pinyin-search\build\deploy_aex.log'
+$old = Join-Path $mediaCore 'AEPinyinSearch.aex'
+$log = Join-Path $repo 'build\deploy_aex.log'
+
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $log) | Out-Null
 
 function Say([string]$message) {
     $line = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')  $message"
     Write-Host $line
-    Add-Content -Path $log -Value $line -Encoding UTF8
+    # BOM-less UTF-8: this is appended to, and PowerShell 5.1's -Encoding UTF8
+    # writes a byte order mark on every new file.
+    [System.IO.File]::AppendAllText($log, "$line`r`n", (New-Object System.Text.UTF8Encoding($false)))
 }
 
 # A loaded .aex is locked, so the real prerequisite is "the file can be opened
@@ -58,16 +74,8 @@ if (-not (Test-Path $src)) {
     Say "FAIL: build output missing: $src"
     exit 3
 }
-
-if (Test-Path $old) {
-    Remove-Item $old -Force
-    Say "removed old copy: $old"
-} else {
-    Say "no MediaCore copy to remove"
-}
-
 if (-not (Test-Path $dstDir)) {
-    Say "FAIL: target folder missing: $dstDir"
+    Say "FAIL: target folder missing: $dstDir (is AE_INSTALL_DIR right?)"
     exit 4
 }
 
@@ -77,8 +85,15 @@ $dstHash = (Get-FileHash $dst -Algorithm SHA256).Hash
 Say "source  $srcHash  $src"
 Say "target  $dstHash  $dst"
 if ($srcHash -ne $dstHash) {
-    Say "FAIL: hash mismatch"
+    Say "FAIL: hash mismatch after copying; the copy in MediaCore was left alone"
     exit 5
+}
+
+if (Test-Path $old) {
+    Remove-Item $old -Force
+    Say "removed the old copy: $old"
+} else {
+    Say "no MediaCore copy to remove"
 }
 
 Say "deploy OK; restart After Effects to load it"

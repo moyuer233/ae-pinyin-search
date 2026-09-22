@@ -4,12 +4,19 @@
 Sources (read-only):
   - AE's own zh_CN localization dictionary  -> effect display names
   - AE's Presets folder (.ffx file names)   -> preset display names
+  - third-party .aex file names             -> third-party effect names
   - PresetEffects.xml matchnames            -> english names where available
 
-Output (consumed by the CEP panel, no runtime pinyin library needed):
-  extension/index.js  - window.AE_INDEX = { effects: [...], presets: [...] }
+Output: build/ae-index.json (gen_pinyin_data.py turns it into the table that is
+compiled into the plug-in). The JSON carries no timestamp, so two runs over the
+same inputs are byte-identical; the "when" is written to build/ae-index.stamp.
 
-Every entry carries a precomputed match key, so the panel only does substring scans.
+Every entry carries a precomputed match key, so the plug-in only does substring
+scans.
+
+Exit code = number of problems, including missing inputs: an index that quietly
+shrinks (a new After Effects version moved the folders) has to fail the step
+instead of producing a plug-in that cannot find anything.
 """
 from __future__ import annotations
 
@@ -17,22 +24,25 @@ import json
 import re
 import sys
 import time
-import unicodedata
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from pypinyin import Style, lazy_pinyin
 
-AE = Path(r"H:\adobe\Adobe After Effects 2026\Support Files")
+import ae_paths
+from build_aex_effects import MIN_EFFECTS, NON_EFFECT_FOLDERS
+
+AE = ae_paths.ae_support()
 DICT = AE / "Dictionaries" / "zh_CN" / "after_effects_zh_CN.dat"
 PRESETS = AE / "Presets"
 PRESET_XML = AE / "PresetEffects.xml"
-AEX_EFFECTS = Path(r"H:\ae-pinyin-search\build\aex-effects.json")
-ROOT = Path(r"H:\ae-pinyin-search")
-BUILD = ROOT / "build"
-EXT = ROOT / "extension"
-BUILD.mkdir(parents=True, exist_ok=True)
-EXT.mkdir(parents=True, exist_ok=True)
+AEX_EFFECTS = ae_paths.BUILD / "aex-effects.json"
+BUILD = ae_paths.BUILD
+
+# Floors below which the inputs clearly did not show up (this machine: 223
+# dictionary effects, 679 presets, ~1270 third-party effects).
+MIN_DICT_EFFECTS = 100
+MIN_PRESETS = 100
 
 PAIR = re.compile(r'^"(\$\$\$/[^=]+)=(.*)"\s*$')
 EFFECT_PREFIX = "$$$/AE/Effect/Name/"
@@ -189,9 +199,20 @@ def make_entry(name: str, english: str, kind: str, extra: dict | None = None) ->
 
 def main() -> int:
     problems = 0
+    missing: list[str] = []
+    for path, what in (
+        (DICT, "the zh_CN dictionary"),
+        (PRESETS, "the Presets folder"),
+        (PRESET_XML, "PresetEffects.xml"),
+        (AEX_EFFECTS, "build/aex-effects.json (run build_aex_effects.py first)"),
+    ):
+        if not path.exists():
+            missing.append(f"{what} not found: {path}")
+
     effects: dict[str, dict] = {}
 
-    for english, zh in parse_effects_from_dict():
+    dict_effects = parse_effects_from_dict()
+    for english, zh in dict_effects:
         e = make_entry(zh, english, "effect")
         if not e:
             problems += 1
@@ -243,8 +264,19 @@ def main() -> int:
     eff_list = sorted(effects.values(), key=lambda x: x["n"])
     pre_list = sorted(presets.values(), key=lambda x: (x.get("cat", ""), x["n"]))
 
+    # Floors and one invariant, checked before anything is written: these are the
+    # failures that used to come out as "effects: 22  presets: 0  problems: 0".
+    if len(dict_effects) < MIN_DICT_EFFECTS:
+        missing.append(f"only {len(dict_effects)} effect(s) from the dictionary (expected >= {MIN_DICT_EFFECTS})")
+    if len(pre_list) < MIN_PRESETS:
+        missing.append(f"only {len(pre_list)} preset(s) (expected >= {MIN_PRESETS})")
+    if third < MIN_EFFECTS:
+        missing.append(f"only {third} third-party effect(s) (expected >= {MIN_EFFECTS})")
+    leaked = sorted({e.get("top", "") for e in eff_list if e.get("top", "").lower() in NON_EFFECT_FOLDERS})
+    if leaked:
+        missing.append("no-effect folders leaked into the index: " + ", ".join(leaked))
+
     data = {
-        "generated": time.strftime("%Y-%m-%d %H:%M:%S"),
         "source": {
             "dict": str(DICT),
             "presets": str(PRESETS),
@@ -260,19 +292,30 @@ def main() -> int:
         "presets": pre_list,
     }
 
-    (BUILD / "ae-index.json").write_text(
-        json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
-
-    # The CEP panel this used to feed is retired (.aex replaced it), so only the
-    # JSON is produced now; nothing writes into extension\ any more.
-    print(f"effects: {len(eff_list)}  presets: {len(pre_list)}  problems: {problems}")
-    print(f"wrote {BUILD / 'ae-index.json'}")
+    print(f"effects: {len(eff_list)}  presets: {len(pre_list)}  third-party: {third}")
     print("\nsample effects:")
     for e in eff_list[:8]:
         print(f"  {e['n']:<18} en={e['e']:<22} full={e['f']:<20} ini={e['i']}")
+
     print("\nsample presets:")
     for e in pre_list[:5]:
         print(f"  {e['n']:<20} cat={e.get('cat','')[:28]:<30} full={e['f']:<18} ini={e['i']}")
+
+    if missing:
+        print()
+        for line in missing:
+            print(f"  !! {line}")
+        print("FAIL: not writing an index that is missing its inputs")
+        return problems + len(missing)
+
+    BUILD.mkdir(parents=True, exist_ok=True)
+    (BUILD / "ae-index.json").write_text(
+        json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    # Provenance lives in its own file, so the JSON itself stays byte-comparable
+    # between two runs over the same inputs.
+    (BUILD / "ae-index.stamp").write_text(
+        time.strftime("%Y-%m-%d %H:%M:%S") + "\n", encoding="utf-8")
+    print(f"wrote {BUILD / 'ae-index.json'}")
     return problems
 
 

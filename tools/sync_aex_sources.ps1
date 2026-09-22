@@ -5,11 +5,18 @@
 # read-only copy so the sources are version controlled; build from the SDK tree.
 #
 # Usage: powershell -NoProfile -ExecutionPolicy Bypass -File tools\sync_aex_sources.ps1
+#
+# AE_SDK_DIR overrides the SDK location. Every file in the list is attempted even
+# when one is missing, and the summary says what happened: exiting on the first
+# missing file left the mirror half old with no report. Exit code = number of
+# files that could not be copied. ASCII only.
 
 $ErrorActionPreference = 'Stop'
 
-$srcRoot = 'H:\ae-sdk\AfterEffectsSDK_26.5_win\Examples\AEGP\AEPinyinSearch'
-$dstRoot = 'H:\ae-pinyin-search\aex'
+$repo = Split-Path -Parent $PSScriptRoot
+$sdk = if ($env:AE_SDK_DIR) { $env:AE_SDK_DIR } else { 'H:\ae-sdk\AfterEffectsSDK_26.5_win' }
+$srcRoot = Join-Path $sdk 'Examples\AEGP\AEPinyinSearch'
+$dstRoot = Join-Path $repo 'aex'
 
 $files = @(
     'AEPinyinSearch.cpp',
@@ -30,12 +37,14 @@ $files = @(
 )
 
 $copied = 0
+$missing = @()
 foreach ($rel in $files) {
     $from = Join-Path $srcRoot $rel
     $to = Join-Path $dstRoot $rel
     if (-not (Test-Path $from)) {
         Write-Host "MISSING in SDK tree: $rel"
-        exit 1
+        $missing += $rel
+        continue
     }
     $toDir = Split-Path $to -Parent
     if (-not (Test-Path $toDir)) {
@@ -52,4 +61,9 @@ foreach ($rel in $files) { $known[(Join-Path $dstRoot $rel).ToLowerInvariant()] 
 $stale = Get-ChildItem $dstRoot -Recurse -File | Where-Object { -not $known.ContainsKey($_.FullName.ToLowerInvariant()) }
 foreach ($f in $stale) { Write-Host "STALE (not in the file list): $($f.FullName)" }
 
-Write-Host "copied $copied files into $dstRoot"
+Write-Host "copied $copied of $($files.Count) files into $dstRoot"
+if ($missing.Count -gt 0) {
+    Write-Host "FAIL: $($missing.Count) source file(s) missing: $($missing -join ', ')"
+    exit $missing.Count
+}
+exit 0

@@ -23,6 +23,20 @@ static void Check(bool ok, const char* what)
     }
 }
 
+// Guard for a fixture the checks after it index into: without it a broken table
+// turns into an out-of-range read and the run can come out green.
+static bool Require(size_t have, size_t need, const char* what)
+{
+    if (have >= need)
+    {
+        return true;
+    }
+    std::printf(
+        "FAIL  %s (only %d row(s), need %d)\n", what, static_cast<int>(have), static_cast<int>(need));
+    ++g_fail;
+    return false;
+}
+
 static bool AllNamesStartWith(const std::vector<pinyin::Hit>& hits, const char* prefix)
 {
     const size_t n = std::strlen(prefix);
@@ -384,7 +398,10 @@ int main()
     {
         std::vector<pinyin::Hit> plain;
         pinyin::SearchQuery("mohu", plain, 50);
-        Check(plain.size() >= 2, "mohu returns several rows to reorder");
+        if (!Require(plain.size(), 2, "mohu returns several rows to reorder"))
+        {
+            return g_fail;
+        }
 
         pinyin::UsageTable usage;
         const char* loser = kPinyinEntries[plain[1].index].name;
@@ -422,7 +439,10 @@ int main()
         pinyin::UsageTable recent;
         std::vector<pinyin::Hit> plain;
         pinyin::SearchQuery("mohu", plain, 8);
-        Check(plain.size() >= 3, "enough rows to play with recency");
+        if (!Require(plain.size(), 3, "enough rows to play with recency"))
+        {
+            return g_fail;
+        }
 
         const char* a = kPinyinEntries[plain[0].index].name;
         const char* b = kPinyinEntries[plain[1].index].name;

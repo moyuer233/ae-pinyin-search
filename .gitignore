@@ -4,6 +4,9 @@ build/
 # Raw scans dumped by tools (regenerable, and they carry machine paths)
 tools/_*.txt
 
+# Python bytecode from running the tools
+__pycache__/
+
 # Local deployment / diagnostic artifacts
 _backup_*/
 _deploy_backup_*/

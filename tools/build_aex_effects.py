@@ -1,11 +1,20 @@
 # -*- coding: utf-8 -*-
-"""Build the third-party effect list from .aex file names.
+"""Build the effect list from .aex file names.
 
-This is the reliable source: every installed effect ships exactly one .aex, and
-its file name is the effect name the plug-in registers
-(S_ChannelSwitcher.aex -> "S_ChannelSwitcher", Ambient Light.aex -> "Ambient Light").
+Two kinds of .aex live under the plug-in folders:
 
-Read-only. Writes build/aex-effects.json
+  * effects - AE's own (Support Files\\Plug-ins\\Effects\\*.aex) and third-party
+    ones (BorisFX, Sapphire, ... anywhere), whose file name is the name the
+    plug-in registers (S_ChannelSwitcher.aex -> "S_ChannelSwitcher",
+    Ambient Light.aex -> "Ambient Light");
+  * plug-ins that are NOT effects - importers/exporters, keyframe assistants and
+    the extension managers. Those sit in folders AE owns: Format, Keyframe,
+    Extensions. They never appear in the effect menu, so an index row for one of
+    them can only end up as "AE 里找不到这个效果" when it is applied.
+
+Read-only. Writes build/aex-effects.json.
+Exit code = 0, or 1 when a scan root is missing or the result is implausibly
+small - a silently shrinking index is worse than a failed step.
 """
 from __future__ import annotations
 
@@ -13,9 +22,18 @@ import json
 import re
 from pathlib import Path
 
-MEDIACORE = Path(r"C:\Program Files\Adobe\Common\Plug-ins\7.0\MediaCore")
-AE_PLUGINS = Path(r"H:\adobe\Adobe After Effects 2026\Support Files\Plug-ins")
-OUT = Path(r"H:\ae-pinyin-search\build\aex-effects.json")
+import ae_paths
+
+OUT = ae_paths.BUILD / "aex-effects.json"
+
+# Folders AE owns that hold no effects at all (importers, keyframe assistants,
+# extension managers, our own plug-in). Compared against the TOP-level folder
+# name only, so a vendor folder nested anywhere else is never skipped.
+NON_EFFECT_FOLDERS = {"format", "keyframe", "extensions"}
+
+# This machine scans ~1270 effect files; anything far below that means a root
+# moved (a new AE version) rather than "the user uninstalled everything".
+MIN_EFFECTS = 200
 
 # Vendor detection from the path, so the panel can group / label results.
 # These are real vendors only; anything unmatched keeps its top-level folder name.
@@ -58,17 +76,25 @@ def clean_name(stem: str) -> str:
 def main() -> int:
     rows: list[dict] = []
     seen: set[str] = set()
+    skipped: dict[str, int] = {}
+    problems: list[str] = []
 
-    for root in (MEDIACORE, AE_PLUGINS):
+    roots = (ae_paths.mediacore(), ae_paths.ae_plugins())
+    for root in roots:
         if not root.exists():
+            problems.append(f"scan root missing: {root}")
             continue
         for p in sorted(root.rglob("*.aex")):
             try:
                 rel = str(p.relative_to(root))
             except ValueError:
                 rel = str(p)
-            vendor = vendor_of(rel)
             top = top_of(rel)
+            if top.lower() in NON_EFFECT_FOLDERS:
+                skipped[top] = skipped.get(top, 0) + 1
+                continue
+
+            vendor = vendor_of(rel)
             stem = p.stem
             base = VARIANTS.sub("", stem)
 
@@ -93,7 +119,11 @@ def main() -> int:
 
     rows.sort(key=lambda r: (r["vendor"] or r["top"], r["n"]))
     payload = {
-        "source": {"mediacore": str(MEDIACORE), "aePlugins": str(AE_PLUGINS)},
+        "source": {
+            "mediacore": str(roots[0]),
+            "aePlugins": str(roots[1]),
+            "skippedFolders": skipped,
+        },
         "count": len(rows),
         "byGroup": {},
         "effects": rows,
@@ -102,12 +132,25 @@ def main() -> int:
         g = r["vendor"] or r["top"]
         payload["byGroup"][g] = payload["byGroup"].get(g, 0) + 1
 
+    if len(rows) < MIN_EFFECTS:
+        problems.append(f"only {len(rows)} effect file(s) found (expected >= {MIN_EFFECTS})")
+
+    if problems:
+        for line in problems:
+            print(f"  !! {line}")
+        print("FAIL: refusing to overwrite the effect list with this scan")
+        return 1
+
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
 
-    print(f"third-party effects: {len(rows)}")
+    print(f"effect files: {len(rows)}")
     for v, c in sorted(payload["byGroup"].items(), key=lambda x: -x[1]):
         print(f"  {c:>5}  {v}")
+    if skipped:
+        print("skipped (no effects live there):")
+        for folder, c in sorted(skipped.items()):
+            print(f"  {c:>5}  {folder}\\")
     print(f"wrote {OUT}")
     print("\nsamples:")
     for r in rows[:12]:
