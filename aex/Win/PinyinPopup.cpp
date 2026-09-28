@@ -952,10 +952,16 @@ void PinyinPopup::ApplyEntry(int entryIndex)
         jsx += "var t=new File(roots[r]+'/";
         jsx += EscapeJs(e.path);
         jsx += "');if(t.exists){f=t;break;}}";
-        jsx += "if(!f)return 'NOPRESET';";
-        jsx += "var it=null;try{it=app.project.importFile(new ImportOptions(f));}catch(x){return 'NOPRESET';}";
-        jsx += "var n=0;for(var i=0;i<L.length;i++){try{L[i].applyPreset(it);n++;}catch(x){}}";
-        jsx += "return n?'OK':'NOPRESET';";
+        jsx += "if(!f)return 'NOPRESET_FILE';";
+        // Two call shapes, and the status code says which one worked: applyPreset()
+        // is documented for a File, so try the file first and only fall back to the
+        // imported footage item. One click then tells the two apart instead of both
+        // hiding behind the same "NOPRESET" message.
+        jsx += "var n=0,k='';";
+        jsx += "for(var i=0;i<L.length;i++){try{L[i].applyPreset(f);n++;k='OKF';}catch(x){}}";
+        jsx += "if(!n){var it=null;try{it=app.project.importFile(new ImportOptions(f));}catch(x){return 'NOPRESET_IMPORT';}";
+        jsx += "for(var j=0;j<L.length;j++){try{L[j].applyPreset(it);n++;k='OKI';}catch(x){}}}";
+        jsx += "return n?k:'NOPRESET_APPLY';";
     }
     else
     {
@@ -989,6 +995,15 @@ void PinyinPopup::ApplyEntry(int entryIndex)
         jsx += "return n?'OK':'NOEFFECT';";
     }
     jsx += "})();";
+
+    if (e.is_preset)
+    {
+        // Which root and which relative path the script is about to try: without
+        // this line a "NOPRESET_FILE" says nothing about whether the root or the
+        // path was wrong.
+        AEPinyinLog(
+            "preset: root='%s' path='%s'", ToUtf8(PresetsRoot()).c_str(), e.path ? e.path : "");
+    }
 
     AEGP_SuiteHandler suites(i_spbP);
     AEGP_MemHandle resultH = NULL;
@@ -1042,9 +1057,17 @@ void PinyinPopup::ApplyEntry(int entryIndex)
     {
         why = L"AE 里找不到这个效果";
     }
-    else if (status == "NOPRESET")
+    else if (status == "NOPRESET" || status == "NOPRESET_FILE")
     {
-        why = L"预设文件缺失或应用失败";
+        why = L"没找到预设文件（预设目录或路径不对）";
+    }
+    else if (status == "NOPRESET_IMPORT")
+    {
+        why = L"预设文件打不开（导入失败）";
+    }
+    else if (status == "NOPRESET_APPLY")
+    {
+        why = L"AE 拒绝应用这个预设";
     }
     else if (err != A_Err_NONE)
     {

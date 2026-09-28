@@ -81,6 +81,11 @@ must_utf8 = [
     ("menu name (char*)", u8("拼音搜索")),
     ("status code", b"NOEFFECT"),
     ("status code", b"NOPRESET"),
+    ("preset diagnostic: file not found", b"NOPRESET_FILE"),
+    ("preset diagnostic: import failed", b"NOPRESET_IMPORT"),
+    ("preset diagnostic: apply refused", b"NOPRESET_APPLY"),
+    ("preset diagnostic: file path log", b"preset: root="),
+    ("preset apply path (file first)", b"n++;k='OKF'"),
     ("jsx bridge marker", b"ADBE Effect Parade"),
     ("jsx preset call", b"applyPreset"),
     ("hotkey window class", b"AEPinyinSearchHotkeyWnd"),
@@ -109,7 +114,9 @@ must_utf16 = [
     ("fail: no comp", u16("当前没有打开的合成")),
     ("fail: no layer", u16("先在时间线里选中至少一个图层")),
     ("fail: no effect", u16("AE 里找不到这个效果")),
-    ("fail: no preset", u16("预设文件缺失或应用失败")),
+    ("fail: preset file missing", u16("没找到预设文件（预设目录或路径不对）")),
+    ("fail: preset import", u16("预设文件打不开（导入失败）")),
+    ("fail: preset refused", u16("AE 拒绝应用这个预设")),
     ("presets folder is found at runtime", u16("\\Support Files\\Presets")),
 ]
 

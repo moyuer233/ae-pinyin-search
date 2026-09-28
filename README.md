@@ -3,7 +3,7 @@
 给 After Effects 2026 用的拼音搜索浮窗。按热键或鼠标侧键唤出，在鼠标旁边弹出条状输入框。
 如：打 `gsmh` 就出「高斯模糊」，回车（或单击）应用到当前选中图层，告别翻效果栏，频繁切换输入法。
 
-当前版本 v0.6.0 · [下载 AEPinyinSearch.aex](https://github.com/moyuer233/ae-pinyin-search/releases)
+当前版本 v0.6.1 · [下载 AEPinyinSearch.aex](https://github.com/moyuer233/ae-pinyin-search/releases)
 
 ![license](https://img.shields.io/badge/license-MIT-blue) ![release](https://img.shields.io/github/v/release/moyuer233/ae-pinyin-search) ![downloads](https://img.shields.io/github/downloads/moyuer233/ae-pinyin-search/total)
 

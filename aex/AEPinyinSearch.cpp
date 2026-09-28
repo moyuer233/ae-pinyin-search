@@ -17,7 +17,7 @@
 // Bumped with every released build: the plug-in has no version field the host
 // shows, so this string (written to the log at load) is how a deployed .aex
 // identifies itself.
-static const char* const kVersion = "0.6.0";
+static const char* const kVersion = "0.6.1";
 
 // The global mouse hook and the hotkey live on a thread this plug-in owns.
 //

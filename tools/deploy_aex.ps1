@@ -25,7 +25,11 @@ $ErrorActionPreference = 'Stop'
 
 $repo = Split-Path -Parent $PSScriptRoot
 $ae = if ($env:AE_INSTALL_DIR) { $env:AE_INSTALL_DIR } else { 'H:\adobe\Adobe After Effects 2026' }
-$buildDir = if ($env:AE_PLUGIN_BUILD_DIR) { $env:AE_PLUGIN_BUILD_DIR } else { 'H:\ae-sdk\build' }
+# Derived from AE_SDK_DIR exactly like rebuild_aex.ps1 and tools\ae_paths.py: one
+# definition for the build output, or the deploy copies a stale .aex from an older
+# directory (that is how a build meant for <sdk>\build went out from H:\ae-sdk\build).
+$sdk = if ($env:AE_SDK_DIR) { $env:AE_SDK_DIR } else { 'H:\ae-sdk\AfterEffectsSDK_26.5_win' }
+$buildDir = if ($env:AE_PLUGIN_BUILD_DIR) { $env:AE_PLUGIN_BUILD_DIR } else { Join-Path $sdk 'build' }
 $mediaCore = if ($env:AE_MEDIACORE) { $env:AE_MEDIACORE } else { 'C:\Program Files\Adobe\Common\Plug-ins\7.0\MediaCore' }
 
 $src = Join-Path $buildDir 'AEGP\AEPinyinSearch.aex'
